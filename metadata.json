@@ -1,0 +1,6 @@
+{
+  "name": "Sistem Analisis & Penilaian Video AI Lomba Konten Bondowoso",
+  "description": "Platform terintegrasi analisis teknis, pre-screening AI, scoring dewan juri 5 aspek, dan live leaderboard untuk Lomba Konten Video AI Kabupaten Bondowoso.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
