@@ -191,3 +191,53 @@ test('extractCommentRows correctly extracts comments and aspects from scored vid
   assert.equal(parsed.data_video_dan_komentar[0].id_karya, 'BND01');
 });
 
+test('zipParser extracts ALL videos from a ZIP, regardless of root, wrappers, or nested folders', async () => {
+  const { extractSubmissionsFromZip, isIgnoredZipPath, parseSubmissionMetadata } = await import('./zipParser.ts');
+
+  // Verify macOS and hidden path filtering
+  assert.equal(isIgnoredZipPath('__MACOSX/._video1.mp4'), true);
+  assert.equal(isIgnoredZipPath('.DS_Store'), true);
+  assert.equal(isIgnoredZipPath('folder/.DS_Store'), true);
+  assert.equal(isIgnoredZipPath('folder/video1.mp4'), false);
+
+  // Scenario 1: Multiple videos in a root folder or wrapper folder
+  const mockEntries1 = [
+    { relativePath: 'Koleksi_Lomba/P01_Budi_Pesona_Ijen/video.mp4', zipEntry: { dir: false } },
+    { relativePath: 'Koleksi_Lomba/P01_Budi_Pesona_Ijen/prompt.txt', zipEntry: { dir: false } },
+    { relativePath: 'Koleksi_Lomba/P02_Siti_Kopi_Raung/video.mp4', zipEntry: { dir: false } },
+    { relativePath: 'Koleksi_Lomba/P02_Siti_Kopi_Raung/dokumen.pdf', zipEntry: { dir: false } },
+    { relativePath: 'Koleksi_Lomba/P03_Andi_Batik_Bondowoso/video.mp4', zipEntry: { dir: false } },
+    { relativePath: '__MACOSX/._video.mp4', zipEntry: { dir: false } },
+  ];
+
+  const submissions1 = extractSubmissionsFromZip(mockEntries1);
+  // Must extract all 3 videos, NOT just 1!
+  assert.equal(submissions1.length, 3, 'Must extract all 3 videos from wrapped folder');
+  assert.equal(submissions1[0].idPeserta, 'P01');
+  assert.equal(submissions1[0].namaPeserta, 'Budi');
+  assert.equal(submissions1[0].judulKarya, 'Pesona Ijen');
+  assert.ok(submissions1[0].promptEntry !== undefined, 'Prompt txt should be paired');
+
+  assert.equal(submissions1[1].idPeserta, 'P02');
+  assert.equal(submissions1[1].namaPeserta, 'Siti');
+  assert.equal(submissions1[1].judulKarya, 'Kopi Raung');
+  assert.ok(submissions1[1].docEntry !== undefined, 'Doc pdf should be paired');
+
+  assert.equal(submissions1[2].idPeserta, 'P03');
+  assert.equal(submissions1[2].namaPeserta, 'Andi');
+
+  // Scenario 2: Multiple videos at flat root of zip
+  const mockEntries2 = [
+    { relativePath: 'P10_Doni_Kawah_Ijen.mp4', zipEntry: { dir: false } },
+    { relativePath: 'P11_Rina_Kuliner_Tape.mp4', zipEntry: { dir: false } },
+    { relativePath: 'video_santai.mp4', zipEntry: { dir: false } },
+  ];
+  const submissions2 = extractSubmissionsFromZip(mockEntries2);
+  assert.equal(submissions2.length, 3, 'Must extract all 3 flat root videos');
+  assert.equal(submissions2[0].idPeserta, 'P10');
+  assert.equal(submissions2[0].namaPeserta, 'Doni');
+  assert.equal(submissions2[1].idPeserta, 'P11');
+  assert.equal(submissions2[1].namaPeserta, 'Rina');
+});
+
+

@@ -34,6 +34,7 @@ import {
   PenilaianJuri,
 } from '../types/index.ts';
 import { validateTechnicalSpecs } from '../utils/validation.ts';
+import { extractSubmissionsFromZip } from '../utils/zipParser.ts';
 
 interface AdminPanelProps {
   karyas: Karya[];
@@ -82,7 +83,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Handle ZIP Ingestion (PRD Section 5)
+  // Handle ZIP Ingestion (PRD Section 5) - Extracts ALL video files reliably
   const handleZipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -101,51 +102,87 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       const zip = new JSZip();
       const zipContent = await zip.loadAsync(file);
 
-      const logs: string[] = ['Arsip ZIP berhasil dibuka. Memindai struktur folder direktori...'];
-      const folderGroups: Record<string, { mp4?: any; doc?: any; prompt?: any }> = {};
+      const logs: string[] = ['Arsip ZIP berhasil dibuka. Memindai semua berkas video dan direktori...'];
 
+      // Gather raw non-directory entries
+      const rawEntries: Array<{ relativePath: string; zipEntry: any }> = [];
       zipContent.forEach((relativePath, zipEntry) => {
-        if (zipEntry.dir) return;
-
-        // Pattern: [ID_Peserta]_[Nama_Peserta]_[Judul_Karya]/video.mp4
-        const parts = relativePath.split('/');
-        const folderName = parts.length > 1 ? parts[0] : 'DEFAULT';
-        const fileName = parts[parts.length - 1];
-
-        if (!folderGroups[folderName]) {
-          folderGroups[folderName] = {};
-        }
-
-        if (fileName.toLowerCase().endsWith('.mp4')) {
-          folderGroups[folderName].mp4 = zipEntry;
-        } else if (fileName.toLowerCase().endsWith('.pdf')) {
-          folderGroups[folderName].doc = zipEntry;
-        } else if (fileName.toLowerCase().endsWith('.txt')) {
-          folderGroups[folderName].prompt = zipEntry;
-        }
+        rawEntries.push({ relativePath, zipEntry });
       });
 
-      const parsedFolders = Object.keys(folderGroups).filter((k) => k !== 'DEFAULT');
-      logs.push(`Ditemukan ${parsedFolders.length} folder peserta sesuai pola Juknis.`);
+      // Extract all submissions (each video file is extracted as a separate karya)
+      const submissions = extractSubmissionsFromZip(rawEntries);
+
+      if (submissions.length === 0) {
+        setZipError(
+          'Tidak ditemukan berkas video (.mp4, .mov, .webm, dll) di dalam arsip ZIP. Pastikan arsip berisi berkas video peserta lomba.'
+        );
+        setZipLog((prev) => [...prev, '⚠️ Peringatan: Tidak ada berkas video yang ditemukan dalam ZIP.']);
+        return;
+      }
+
+      logs.push(`Ditemukan ${submissions.length} berkas video di dalam arsip. Memproses ekstraksi lengkap...`);
+
+      // Find highest existing numeric ID in karyas to prevent ID collisions
+      let maxIdNum = 100;
+      karyas.forEach((k) => {
+        const match = k.id.match(/BND-?(\d+)/i);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (!isNaN(num) && num > maxIdNum) {
+            maxIdNum = num;
+          }
+        }
+      });
 
       const newKaryasList: Karya[] = [];
       const newPesertasMap: Record<string, Peserta> = {};
 
-      for (let i = 0; i < parsedFolders.length; i++) {
-        const folder = parsedFolders[i];
-        // Split by "_"
-        const tokens = folder.split('_');
-        const idPeserta = tokens[0] || `P-NEW-${i + 1}`;
-        const namaPeserta = tokens[1] || `Peserta ${i + 1}`;
-        const judulKarya = tokens.slice(2).join(' ') || `Karya AI Bondowoso ${i + 1}`;
+      for (let i = 0; i < submissions.length; i++) {
+        const sub = submissions[i];
 
-        // Simulated extraction of video metadata
-        const randDuration = Math.round((35 + Math.random() * 20) * 10) / 10;
+        let videoBlobUrl = '';
+        try {
+          const blob = await sub.videoEntry.async('blob');
+          videoBlobUrl = URL.createObjectURL(blob);
+        } catch {
+          videoBlobUrl = '';
+        }
+
+        // Detect real video duration and resolution in browser
+        const mediaInfo = await new Promise<{ duration: number; width: number; height: number }>((resolve) => {
+          if (!videoBlobUrl) {
+            resolve({ duration: 45.0, width: 1080, height: 1920 });
+            return;
+          }
+          const video = document.createElement('video');
+          video.preload = 'metadata';
+          video.src = videoBlobUrl;
+          const timeout = setTimeout(() => {
+            resolve({ duration: 45.0, width: 1080, height: 1920 });
+          }, 1200);
+          video.onloadedmetadata = () => {
+            clearTimeout(timeout);
+            const dur =
+              video.duration && !isNaN(video.duration) && isFinite(video.duration)
+                ? Math.round(video.duration * 10) / 10
+                : 45.0;
+            const w = video.videoWidth || 1080;
+            const h = video.videoHeight || 1920;
+            resolve({ duration: dur, width: w, height: h });
+          };
+          video.onerror = () => {
+            clearTimeout(timeout);
+            resolve({ duration: 45.0, width: 1080, height: 1920 });
+          };
+        });
+
+        const aspect = mediaInfo.width / (mediaInfo.height || 1);
         const metadata: VideoMetadata = {
-          duration_seconds: randDuration,
-          width: 1080,
-          height: 1920,
-          aspect_ratio: 0.5625,
+          duration_seconds: mediaInfo.duration,
+          width: mediaInfo.width,
+          height: mediaInfo.height,
+          aspect_ratio: Math.round(aspect * 10000) / 10000,
           fps: 30,
           bitrate_kbps: 4500,
           codec: 'H.264/MP4',
@@ -156,45 +193,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
         const valResult = validateTechnicalSpecs(metadata);
 
-        const newPeserta: Peserta = {
-          id: idPeserta,
-          nama: namaPeserta,
-          email: `${idPeserta.toLowerCase()}@peserta.bondowoso.go.id`,
-          kontak: '0812' + Math.floor(10000000 + Math.random() * 90000000),
-          instansi: 'Kreator Konten Bondowoso',
-          kota: 'Bondowoso',
-        };
-
-        let videoBlobUrl = '';
-        if (folderGroups[folder]?.mp4) {
-          try {
-            const blob = await folderGroups[folder].mp4.async('blob');
-            videoBlobUrl = URL.createObjectURL(blob);
-          } catch {
-            videoBlobUrl = '';
-          }
-        }
-
         let promptText = 'Prompt list hasil ekstraksi arsip: Midjourney v6 + Runway Gen-3 Alpha.';
-        if (folderGroups[folder]?.prompt) {
+        if (sub.promptEntry) {
           try {
-            promptText = await folderGroups[folder].prompt.async('text');
+            promptText = await sub.promptEntry.async('text');
           } catch {
             // fallback
           }
         }
 
+        const idPeserta = sub.idPeserta || `P-NEW-${i + 1}`;
+        const namaPeserta = sub.namaPeserta || `Peserta ${i + 1}`;
+
+        const newPeserta: Peserta = pesertas[idPeserta] || {
+          id: idPeserta,
+          nama: namaPeserta,
+          email: `${idPeserta.toLowerCase().replace(/[^a-z0-9]/g, '')}@peserta.bondowoso.go.id`,
+          kontak: '0812' + Math.floor(10000000 + Math.random() * 90000000),
+          instansi: 'Kreator Konten Bondowoso',
+          kota: 'Bondowoso',
+        };
+
+        const newId = `BND-${maxIdNum + 1 + i}`;
         const newKarya: Karya = {
-          id: `BND-${100 + i}`,
+          id: newId,
           peserta_id: idPeserta,
-          judul_karya: judulKarya,
-          kategori: (i % 2 === 0 ? 'Pariwisata' : i % 3 === 0 ? 'Budaya' : 'Kuliner'),
-          deskripsi: `Karya video AI inovatif bertema potensi Kabupaten Bondowoso yang diekstrak dari arsip kolektif ZIP panitia.`,
+          judul_karya: sub.judulKarya,
+          kategori: sub.kategori as any,
+          deskripsi: `Karya video AI inovatif bertema potensi Kabupaten Bondowoso yang diekstrak dari arsip kolektif ZIP panitia (${sub.filename}).`,
           video_url: videoBlobUrl || 'blob:sample-video',
-          video_filename: `${folder}.mp4`,
+          video_filename: sub.filename,
           prompt_list_text: promptText,
           prompt_tools: ['Midjourney v6', 'Runway Gen-3'],
-          dokumen_pendukung_nama: folderGroups[folder]?.doc ? 'dokumen_pendukung.pdf' : undefined,
+          dokumen_pendukung_nama: sub.docEntry ? 'dokumen_pendukung.pdf' : undefined,
           metadata,
           status_teknis: valResult.status,
           status_teknis_reasons: valResult.reasons,
@@ -204,12 +235,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
         newKaryasList.push(newKarya);
         newPesertasMap[idPeserta] = newPeserta;
-        logs.push(`✓ [${idPeserta}] "${judulKarya}" berhasil diverifikasi: Status ${valResult.status}`);
+        logs.push(
+          `✓ [${idPeserta}] "${sub.judulKarya}" (${sub.filename}) -> ID #${newId} - Status ${valResult.status} (${mediaInfo.duration}s, ${mediaInfo.width}x${mediaInfo.height})`
+        );
       }
 
       setZipLog(logs);
       onAddKaryaBatch(newKaryasList, newPesertasMap);
-      setZipSuccessMessage(`Berhasil mengekstrak ${newKaryasList.length} karya video dari berkas arsip ZIP.`);
+      setZipSuccessMessage(`Berhasil mengekstrak seluruh ${newKaryasList.length} karya video dari berkas arsip ZIP tanpa ada yang terlewat.`);
     } catch (err: any) {
       setZipError(`Terjadi kesalahan saat memproses arsip ZIP: ${err.message || 'Format tidak didukung'}`);
     } finally {
