@@ -24,6 +24,7 @@ import {
   Search,
   Award,
   Users,
+  MessageSquare,
 } from 'lucide-react';
 import {
   Karya,
@@ -44,6 +45,7 @@ interface AdminPanelProps {
   onRunAIBatchAnalysis: () => Promise<void>;
   isAIBatchRunning: boolean;
   onResetToDemoData: () => void;
+  onOpenExportComments?: (karyaId?: string) => void;
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -56,6 +58,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onRunAIBatchAnalysis,
   isAIBatchRunning,
   onResetToDemoData,
+  onOpenExportComments,
 }) => {
   const [isProcessingZip, setIsProcessingZip] = useState<boolean>(false);
   const [zipLog, setZipLog] = useState<string[]>([]);
@@ -594,6 +597,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 Red Flag ({redFlagCount})
               </button>
             </div>
+
+            {/* Ekspor Semua Komentar Juri */}
+            <button
+              type="button"
+              onClick={() => onOpenExportComments ? onOpenExportComments() : undefined}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-indigo-950/90 hover:bg-indigo-900 text-indigo-200 border border-indigo-700/70 text-xs font-bold transition-colors shadow-sm"
+              title="Ekspor seluruh catatan dan evaluasi dewan juri tiap video"
+            >
+              <MessageSquare className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Ekspor Komentar Juri</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-indigo-500/30 text-indigo-300 font-mono font-bold">
+                {penilaians.length}
+              </span>
+            </button>
           </div>
         </div>
 
@@ -764,6 +781,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           <Trash2 className="w-3.5 h-3.5" />
                           <span>Hapus</span>
                         </button>
+
+                        {/* Export Comments for this video if scored */}
+                        {relatedPenilaians.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenExportComments ? onOpenExportComments(karya.id) : undefined}
+                            className="p-1.5 rounded-lg text-xs bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 hover:text-white border border-indigo-700/60 transition-colors shadow-sm"
+                            title="Ekspor catatan dan komentar dewan juri untuk karya ini"
+                          >
+                            <MessageSquare className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

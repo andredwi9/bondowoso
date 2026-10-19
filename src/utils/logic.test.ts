@@ -110,3 +110,84 @@ test('PRD V2 bobot penilaian sums to 1.00 (100%)', () => {
   const sum = 0.25 + 0.20 + 0.20 + 0.15 + 0.20;
   assert.equal(Math.round(sum * 100) / 100, 1.00);
 });
+
+test('extractCommentRows correctly extracts comments and aspects from scored videos', async () => {
+  const { extractCommentRows, generateCommentsCSV, generateCommentsJSON } = await import('./exportComments.ts');
+  const mockKaryas = [
+    {
+      id: 'BND01',
+      peserta_id: 'P-001',
+      judul_karya: 'Ijen Wonder',
+      kategori: 'Pariwisata' as const,
+      deskripsi: 'Deskripsi Ijen',
+      video_url: '',
+      video_filename: 'video.mp4',
+      metadata: { duration_seconds: 45, width: 1080, height: 1920, aspect_ratio: 0.5625, fps: 30, bitrate_kbps: 4000, codec: 'H.264', audio_codec: 'AAC', audio_sample_rate_khz: 48, audio_bitrate_kbps: 128 },
+      status_teknis: 'PASS' as const,
+      status_teknis_reasons: [],
+      is_overridden: false,
+      created_at: '2026-10-18T09:00:00Z',
+    },
+    {
+      id: 'BND02',
+      peserta_id: 'P-002',
+      judul_karya: 'Unscored Video',
+      kategori: 'Budaya' as const,
+      deskripsi: 'Deskripsi',
+      video_url: '',
+      video_filename: 'video.mp4',
+      metadata: { duration_seconds: 40, width: 1080, height: 1920, aspect_ratio: 0.5625, fps: 30, bitrate_kbps: 4000, codec: 'H.264', audio_codec: 'AAC', audio_sample_rate_khz: 48, audio_bitrate_kbps: 128 },
+      status_teknis: 'PASS' as const,
+      status_teknis_reasons: [],
+      is_overridden: false,
+      created_at: '2026-10-18T09:00:00Z',
+    },
+  ];
+
+  const mockPesertas = {
+    'P-001': { id: 'P-001', nama: 'Ahmad Fauzan', email: 'fauzan@test.com', kontak: '0812', kota: 'Bondowoso' },
+    'P-002': { id: 'P-002', nama: 'Siti Aminah', email: 'siti@test.com', kontak: '0813', kota: 'Bondowoso' },
+  };
+
+  const mockPenilaians = [
+    {
+      id: 'PEN-1',
+      karya_id: 'BND01',
+      juri_id: 'juri-1',
+      juri_nama: 'Dr. Ir. Budi Santoso',
+      juri_peran: 'Ketua Juri',
+      skor_tema: 90,
+      skor_kreativitas: 90,
+      skor_visual_ai: 90,
+      skor_editing: 90,
+      skor_audio: 90,
+      total_skor: 90,
+      catatan_evaluasi: 'Karya sangat memukau dan sinematik.',
+      aspect_reasons: {
+        ide_konten: 'Ide orisinal.',
+        pemanfaatan_ai: 'Prompt akurat.',
+        alur_cerita: 'Transisi halus.',
+        kerapian: 'Audio bersih.',
+        kualitas_video: 'Grading warna tepat.',
+      },
+      status: 'SUBMITTED' as const,
+    },
+  ];
+
+  const rows = extractCommentRows(mockKaryas, mockPesertas, mockPenilaians);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].karya_id, 'BND01');
+  assert.equal(rows[0].juri_nama, 'Dr. Ir. Budi Santoso');
+  assert.equal(rows[0].catatan_evaluasi, 'Karya sangat memukau dan sinematik.');
+  assert.equal(rows[0].catatan_ide_konten, 'Ide orisinal.');
+
+  const csv = generateCommentsCSV(mockKaryas, mockPesertas, mockPenilaians);
+  assert.ok(csv.startsWith('\uFEFF"ID Karya"'));
+  assert.ok(csv.includes('Karya sangat memukau dan sinematik.'));
+
+  const jsonStr = generateCommentsJSON(mockKaryas, mockPesertas, mockPenilaians);
+  const parsed = JSON.parse(jsonStr);
+  assert.equal(parsed.total_video_dinilai, 1);
+  assert.equal(parsed.data_video_dan_komentar[0].id_karya, 'BND01');
+});
+

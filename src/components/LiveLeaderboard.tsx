@@ -17,6 +17,7 @@ import {
   EyeOff,
   Flame,
   ArrowUpDown,
+  MessageSquare,
 } from 'lucide-react';
 import {
   Karya,
@@ -34,6 +35,7 @@ interface LiveLeaderboardProps {
   session: UserRoleSession;
   onNavigateToBeritaAcara: () => void;
   onSelectKaryaToScore?: (karyaId: string) => void;
+  onOpenExportComments?: (karyaId?: string) => void;
 }
 
 export const LiveLeaderboard: React.FC<LiveLeaderboardProps> = ({
@@ -43,6 +45,7 @@ export const LiveLeaderboard: React.FC<LiveLeaderboardProps> = ({
   session,
   onNavigateToBeritaAcara,
   onSelectKaryaToScore,
+  onOpenExportComments,
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedKategori, setSelectedKategori] = useState<string>('Semua');
@@ -152,14 +155,26 @@ export const LiveLeaderboard: React.FC<LiveLeaderboardProps> = ({
         </div>
 
         {/* Export Buttons */}
-        <div className="flex items-center space-x-2 self-start md:self-auto">
+        <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+          <button
+            onClick={() => onOpenExportComments ? onOpenExportComments() : undefined}
+            type="button"
+            className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-indigo-950/80 hover:bg-indigo-900 text-indigo-200 text-xs font-bold border border-indigo-700/60 transition-colors shadow-sm"
+            title="Ekspor semua komentar dan justifikasi dewan juri tiap video"
+          >
+            <MessageSquare className="w-4 h-4 text-indigo-400" />
+            <span>Ekspor Komentar Juri</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-indigo-500/30 text-indigo-300">
+              {penilaians.length}
+            </span>
+          </button>
           <button
             onClick={handleExportCSV}
             type="button"
             className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
           >
             <Download className="w-4 h-4 text-emerald-400" />
-            <span>Ekspor CSV / Excel</span>
+            <span>Ekspor CSV Rekap</span>
           </button>
           <button
             onClick={onNavigateToBeritaAcara}
@@ -523,9 +538,22 @@ export const LiveLeaderboard: React.FC<LiveLeaderboardProps> = ({
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             {/* Jury Scores Breakdown */}
                             <div className="space-y-2">
-                              <h5 className="font-bold text-xs uppercase tracking-wider text-indigo-400">
-                                Rincian Penilaian Dewan Juri:
-                              </h5>
+                              <div className="flex items-center justify-between">
+                                <h5 className="font-bold text-xs uppercase tracking-wider text-indigo-400">
+                                  Rincian Penilaian Dewan Juri:
+                                </h5>
+                                {penilaians.filter((p) => p.karya_id === entry.karya.id).length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onOpenExportComments ? onOpenExportComments(entry.karya.id) : undefined}
+                                    className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-indigo-950 hover:bg-indigo-900 text-indigo-300 text-[11px] font-semibold border border-indigo-800/80 transition-colors"
+                                    title="Ekspor komentar juri untuk video ini"
+                                  >
+                                    <MessageSquare className="w-3.5 h-3.5 text-indigo-400" />
+                                    <span>Ekspor Komentar Video Ini</span>
+                                  </button>
+                                )}
+                              </div>
                               <div className="space-y-2">
                                 {penilaians
                                   .filter((p) => p.karya_id === entry.karya.id)

@@ -13,6 +13,7 @@ import {
   Layers,
   ShieldAlert,
   Upload,
+  MessageSquare,
 } from 'lucide-react';
 import { UserRoleSession } from '../types/index.ts';
 
@@ -34,6 +35,7 @@ interface NavbarProps {
   totalKaryaCount: number;
   unscoredCount: number;
   openTicketCount?: number;
+  onOpenExportComments?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -43,6 +45,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   setSession,
   unscoredCount,
   openTicketCount = 0,
+  onOpenExportComments,
 }) => {
   const handleRoleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
@@ -145,6 +148,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </>
               )}
             </button>
+
+            {/* Quick Export Comments Button */}
+            {onOpenExportComments && (
+              <button
+                type="button"
+                onClick={onOpenExportComments}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/60 transition-colors flex items-center space-x-1.5 shadow-sm"
+                title="Ekspor seluruh catatan dan komentar dewan juri tiap video"
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="hidden md:inline">Ekspor Komentar</span>
+              </button>
+            )}
 
             {/* Role Dropdown */}
             <div className="flex items-center space-x-1.5 bg-slate-800/80 px-2 py-1 rounded-lg border border-slate-700 min-w-0">

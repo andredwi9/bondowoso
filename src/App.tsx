@@ -8,6 +8,7 @@ import { AuditTrailView } from './components/AuditTrailView.tsx';
 import { SingleVideoUploadView } from './components/SingleVideoUploadView.tsx';
 import { ReverseStoryboardView } from './components/ReverseStoryboardView.tsx';
 import { VerificationTicketView } from './components/VerificationTicketView.tsx';
+import { ExportCommentsModal } from './components/ExportCommentsModal.tsx';
 import {
   INITIAL_KARYA,
   INITIAL_PESERTA,
@@ -84,6 +85,13 @@ export default function App() {
 
   const [isAIBatchRunning, setIsAIBatchRunning] = useState<boolean>(false);
   const [showResetConfirmModal, setShowResetConfirmModal] = useState<boolean>(false);
+  const [isExportCommentsModalOpen, setIsExportCommentsModalOpen] = useState<boolean>(false);
+  const [exportCommentsFilterKaryaId, setExportCommentsFilterKaryaId] = useState<string | null>(null);
+
+  const handleOpenExportComments = (karyaId?: string) => {
+    setExportCommentsFilterKaryaId(karyaId || null);
+    setIsExportCommentsModalOpen(true);
+  };
 
   // Sync state changes to localStorage
   useEffect(() => {
@@ -455,6 +463,7 @@ export default function App() {
         totalKaryaCount={karyas.length}
         unscoredCount={unscoredCount}
         openTicketCount={openTicketsCount}
+        onOpenExportComments={() => handleOpenExportComments()}
       />
 
       {/* Main View Router */}
@@ -484,6 +493,7 @@ export default function App() {
               setSelectedKaryaForJury(karyaId);
               setActiveTab('jury');
             }}
+            onOpenExportComments={handleOpenExportComments}
           />
         )}
 
@@ -520,6 +530,7 @@ export default function App() {
             onRunAIBatchAnalysis={handleRunAIBatchAnalysis}
             isAIBatchRunning={isAIBatchRunning}
             onResetToDemoData={handleResetToDemoData}
+            onOpenExportComments={handleOpenExportComments}
           />
         )}
 
@@ -534,6 +545,16 @@ export default function App() {
 
         {activeTab === 'audit' && <AuditTrailView logs={auditLogs} />}
       </main>
+
+      {/* Export Comments Modal */}
+      <ExportCommentsModal
+        isOpen={isExportCommentsModalOpen}
+        onClose={() => setIsExportCommentsModalOpen(false)}
+        karyas={karyas}
+        pesertas={pesertas}
+        penilaians={penilaians}
+        initialFilterKaryaId={exportCommentsFilterKaryaId}
+      />
 
       {/* Footer */}
       <footer className="print:hidden border-t border-slate-900 bg-slate-950/80 py-6 text-center text-xs text-slate-500">
