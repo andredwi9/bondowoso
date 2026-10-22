@@ -14,6 +14,7 @@ import {
   ShieldAlert,
   Upload,
   MessageSquare,
+  FolderDown,
 } from 'lucide-react';
 import { UserRoleSession } from '../types/index.ts';
 
@@ -36,6 +37,7 @@ interface NavbarProps {
   unscoredCount: number;
   openTicketCount?: number;
   onOpenExportComments?: () => void;
+  onOpenGDriveModal?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -46,6 +48,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   unscoredCount,
   openTicketCount = 0,
   onOpenExportComments,
+  onOpenGDriveModal,
 }) => {
   const handleRoleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
@@ -148,6 +151,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </>
               )}
             </button>
+
+            {/* Quick Google Drive Import Button */}
+            {onOpenGDriveModal && (
+              <button
+                type="button"
+                onClick={onOpenGDriveModal}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-gradient-to-r from-emerald-950/90 to-indigo-950/90 hover:from-emerald-900 hover:to-indigo-900 text-emerald-300 border border-emerald-600/50 transition-colors flex items-center space-x-1.5 shadow-sm"
+                title="Ekstrak dan analisa seluruh video dari tautan Google Drive Folder"
+              >
+                <FolderDown className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="hidden sm:inline">Analisa Google Drive</span>
+              </button>
+            )}
 
             {/* Quick Export Comments Button */}
             {onOpenExportComments && (

@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateJuryScore, calculateTotalAkhir } from './scoring.ts';
+import {
+  calculateJuryScore,
+  calculateTotalAkhir,
+  toggleIncrementStep,
+  clampScore,
+  adjustAspectScore,
+} from './scoring.ts';
 import { validateTechnicalSpecs, canJuryScoreWork } from './validation.ts';
 
 test('calculateJuryScore calculates weighted formula correctly based on PRD V2 Lampiran D.1', () => {
@@ -182,7 +188,7 @@ test('extractCommentRows correctly extracts comments and aspects from scored vid
   assert.equal(rows[0].catatan_ide_konten, 'Ide orisinal.');
 
   const csv = generateCommentsCSV(mockKaryas, mockPesertas, mockPenilaians);
-  assert.ok(csv.startsWith('\uFEFF"ID Karya"'));
+  assert.ok(csv.startsWith('\uFEFF"No"'));
   assert.ok(csv.includes('Karya sangat memukau dan sinematik.'));
 
   const jsonStr = generateCommentsJSON(mockKaryas, mockPesertas, mockPenilaians);
@@ -240,4 +246,182 @@ test('zipParser extracts ALL videos from a ZIP, regardless of root, wrappers, or
   assert.equal(submissions2[1].namaPeserta, 'Rina');
 });
 
+test('autonomousAgents generates dynamic, non-85 rubric scores with justifications', async () => {
+  const { generateAutonomousAgentAnalysis } = await import('./autonomousAgents.ts');
+
+  const testKarya = {
+    id: 'BND-TEST',
+    judul_karya: 'Pesona Kawah Ijen dan Blue Fire',
+    kategori: 'Pariwisata' as const,
+    deskripsi: 'Sinematik Kawah Ijen dengan drone',
+    prompt_list_text: 'Midjourney v6: Kawah Ijen blue fire volcanic crater lake at dawn',
+    metadata: {
+      duration_seconds: 45,
+      width: 1080,
+      height: 1920,
+      aspect_ratio: 0.5625,
+      fps: 30,
+      bitrate_kbps: 4500,
+      codec: 'H.264/MP4',
+      audio_codec: 'AAC',
+      audio_sample_rate_khz: 48,
+      audio_bitrate_kbps: 192,
+    },
+  };
+
+  const analysis = generateAutonomousAgentAnalysis(testKarya);
+  assert.ok(analysis.agent_scorecard, 'Agent scorecard must exist');
+
+  const card = analysis.agent_scorecard;
+  const scores = [
+    card.ide_konten.score,
+    card.pemanfaatan_ai.score,
+    card.alur_cerita.score,
+    card.kerapian.score,
+    card.kualitas_video.score,
+  ];
+
+  // Verify scores are not flat 85 across all rubrics
+  const all85 = scores.every((s) => s === 85);
+  assert.equal(all85, false, 'Rubric scores must NOT all be flat 85');
+
+  // Verify all 5 aspect scores are in valid range
+  for (const s of scores) {
+    assert.ok(s >= 70 && s <= 100, `Score ${s} should be between 70 and 100`);
+  }
+
+  // Verify weighted total calculation: 25% + 20% + 20% + 15% + 20%
+  const expectedTotal =
+    card.ide_konten.score * 0.25 +
+    card.pemanfaatan_ai.score * 0.20 +
+    card.alur_cerita.score * 0.20 +
+    card.kerapian.score * 0.15 +
+    card.kualitas_video.score * 0.20;
+
+  assert.equal(
+    Math.round(card.total_score * 10) / 10,
+    Math.round(expectedTotal * 10) / 10,
+    'Card total score must match PRD weighted formula'
+  );
+
+  // Verify qualitative reasons exist for all 5 aspects
+  assert.ok(card.ide_konten.reason.length > 10, 'Ide konten reason must be descriptive');
+  assert.ok(card.pemanfaatan_ai.reason.length > 10, 'Pemanfaatan AI reason must be descriptive');
+  assert.ok(card.alur_cerita.reason.length > 10, 'Alur cerita reason must be descriptive');
+  assert.ok(card.kerapian.reason.length > 10, 'Kerapian reason must be descriptive');
+  assert.ok(card.kualitas_video.reason.length > 10, 'Kualitas video reason must be descriptive');
+
+  // Verify cultural RAG and forensics are attached
+  assert.ok(analysis.cultural_rag !== undefined, 'Cultural RAG must be present');
+  assert.ok(analysis.cultural_rag?.detected_bondowoso_entities.length! > 0, 'Should detect Bondowoso entities');
+  assert.ok(analysis.forensics !== undefined, 'Forensics must be present');
+});
+
+test('parseGoogleDriveLink correctly parses folder, file, and query links', async () => {
+  const { parseGoogleDriveLink } = await import('./gdriveParser.ts');
+
+  // Test standard folder URL
+  const p1 = parseGoogleDriveLink('https://drive.google.com/drive/folders/1BONDOWOSO_2026_Koleksi_Lomba_AI_Folder?usp=sharing');
+  assert.equal(p1.isValid, true);
+  assert.equal(p1.type, 'folder');
+  assert.equal(p1.id, '1BONDOWOSO_2026_Koleksi_Lomba_AI_Folder');
+
+  // Test /u/0/ folder URL
+  const p2 = parseGoogleDriveLink('https://drive.google.com/drive/u/0/folders/1a2b3c4d5e6f7g8h9i0j_KLMNOPQR');
+  assert.equal(p2.isValid, true);
+  assert.equal(p2.type, 'folder');
+  assert.equal(p2.id, '1a2b3c4d5e6f7g8h9i0j_KLMNOPQR');
+
+  // Test file URL
+  const p3 = parseGoogleDriveLink('https://drive.google.com/file/d/1XyZ9876543210AbCdEfGhIjKlMnOp/view?usp=drivesdk');
+  assert.equal(p3.isValid, true);
+  assert.equal(p3.type, 'file');
+  assert.equal(p3.id, '1XyZ9876543210AbCdEfGhIjKlMnOp');
+
+  // Test invalid URL
+  const p4 = parseGoogleDriveLink('https://example.com/not-drive');
+  assert.equal(p4.isValid, false);
+});
+
+test('extractAndEvaluateGDriveFolder extracts and evaluates all videos in folder', async () => {
+  const { extractAndEvaluateGDriveFolder } = await import('./gdriveService.ts');
+
+  const result = await extractAndEvaluateGDriveFolder(
+    'https://drive.google.com/drive/folders/1BND_Wisata_Ijen_Wurung_Tancak_2026',
+    [],
+    {}
+  );
+
+  assert.equal(result.success, true);
+  assert.ok(result.karyas.length >= 3, 'Should extract at least 3 videos from Google Drive folder');
+  assert.ok(result.totalFound >= 3);
+
+  // Verify each extracted video has valid metadata and autonomous AI evaluation
+  for (const k of result.karyas) {
+    assert.ok(k.id.startsWith('BND-'));
+    assert.ok(k.judul_karya.length > 0);
+    assert.ok(k.ai_analysis !== undefined, 'Must have AI analysis attached');
+    assert.ok(k.ai_analysis!.score >= 80, 'Score should be evaluated');
+    assert.ok(k.ai_analysis!.agent_scorecard !== undefined, 'Must have 5-Agent scorecard');
+
+    // Verify 5 aspect scores exist and are non-flat
+    const card = k.ai_analysis!.agent_scorecard!;
+    assert.ok(card.ide_konten.score > 0);
+    assert.ok(card.pemanfaatan_ai.score > 0);
+    assert.ok(card.alur_cerita.score > 0);
+    assert.ok(card.kerapian.score > 0);
+  }
+});
+
+test('toggleIncrementStep alternates between 0.5 and 1.0', () => {
+  assert.equal(toggleIncrementStep(0.5), 1.0);
+  assert.equal(toggleIncrementStep(1.0), 0.5);
+});
+
+test('clampScore keeps scores within [0, 100] and rounds to 1 decimal place', () => {
+  assert.equal(clampScore(85.24), 85.2);
+  assert.equal(clampScore(85.26), 85.3);
+  assert.equal(clampScore(105), 100);
+  assert.equal(clampScore(-5), 0);
+  assert.equal(clampScore(0), 0);
+  assert.equal(clampScore(100), 100);
+});
+
+test('adjustAspectScore properly applies +0.5, -0.5, +1.0, -1.0 with boundary safety', () => {
+  assert.equal(adjustAspectScore(85.0, 0.5), 85.5);
+  assert.equal(adjustAspectScore(85.5, -0.5), 85.0);
+  assert.equal(adjustAspectScore(85.0, 1.0), 86.0);
+  assert.equal(adjustAspectScore(86.0, -1.0), 85.0);
+
+  // Boundary conditions
+  assert.equal(adjustAspectScore(99.8, 1.0), 100.0);
+  assert.equal(adjustAspectScore(0.3, -0.5), 0.0);
+});
+
+test('extractAndEvaluateGDriveFolder extracts full batch of 100 videos when requested', async () => {
+  const { extractAndEvaluateGDriveFolder } = await import('./gdriveService.ts');
+
+  const result = await extractAndEvaluateGDriveFolder(
+    'https://drive.google.com/drive/folders/1BND_100_Video_Lengkap_Lomba_Bondowoso_2026',
+    [],
+    {},
+    undefined,
+    { targetCount: 100, maxVideos: 100 }
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.karyas.length, 100, 'Must extract exactly 100 videos');
+  assert.equal(result.totalFound, 100);
+  assert.equal(Object.keys(result.pesertas).length, 100, 'Must have 100 distinct participants');
+
+  // Verify all 100 videos pass Juknis 2026 (Rule-01: 30-60s duration, 9:16 aspect ratio)
+  for (const k of result.karyas) {
+    assert.equal(k.status_teknis, 'PASS', `Video ${k.id} must pass technical specs`);
+    assert.ok(k.metadata.duration_seconds >= 30 && k.metadata.duration_seconds <= 60, `Duration ${k.metadata.duration_seconds} must be 30-60s`);
+    assert.equal(k.metadata.width, 1080);
+    assert.equal(k.metadata.height, 1920);
+    assert.ok(k.ai_analysis !== undefined, 'Must have AI analysis');
+    assert.ok(k.ai_analysis!.agent_scorecard !== undefined, 'Must have 5-Agent scorecard');
+  }
+});
 

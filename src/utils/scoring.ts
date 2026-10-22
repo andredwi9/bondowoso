@@ -43,6 +43,26 @@ export function calculateJuryScore(scores: AspectScores): number {
 }
 
 /**
+ * Batasi nilai (clamp) antara 0 s.d. 100 dengan presisi 1 desimal
+ */
+export function clampScore(score: number): number {
+  return Math.min(100, Math.max(0, Math.round(score * 10) / 10));
+}
+
+/**
+ * Toggle interval langkah penilaian antara +0.5 dan +1.0
+ */
+export function toggleIncrementStep(currentStep: 0.5 | 1.0): 0.5 | 1.0 {
+  return currentStep === 0.5 ? 1.0 : 0.5;
+}
+
+/**
+ * Mengubah skor aspek dengan delta dan clamping aman
+ */
+export function adjustAspectScore(currentScore: number, delta: number): number {
+  return clampScore(currentScore + delta);
+}
+/**
  * Menghitung Total Akhir:
  * Total Akhir = (Skor Rata-rata Juri * 0.80) + (Skor AI * 0.20)
  */
@@ -52,6 +72,17 @@ export function calculateTotalAkhir(skorJuriAvg: number, skorAI: number, hasJury
   }
   const total = skorJuriAvg * BOBOT_TOTAL_AKHIR.juri + skorAI * BOBOT_TOTAL_AKHIR.ai;
   return Math.round(total * 100) / 100;
+}
+
+/**
+ * Predikat Nilai Berdasarkan Skala Resmi (A+ s.d D)
+ */
+export function getPredikatSkor(score: number): string {
+  if (score >= 90) return 'Sangat Baik (A+)';
+  if (score >= 85) return 'Baik (A)';
+  if (score >= 75) return 'Cukup (B)';
+  if (score >= 60) return 'Kurang (C)';
+  return 'Tidak Memenuhi Syarat (D)';
 }
 
 /**

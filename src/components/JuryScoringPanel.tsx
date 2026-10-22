@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Lock,
   CheckCircle,
@@ -18,6 +18,12 @@ import {
   Camera,
   RotateCcw,
   BookOpen,
+  Keyboard,
+  Save,
+  Plus,
+  Minus,
+  HelpCircle,
+  X,
 } from 'lucide-react';
 import {
   AspectScores,
@@ -27,8 +33,15 @@ import {
   UserRoleSession,
   CoPilotMessage,
 } from '../types/index.ts';
-import { calculateJuryScore, BOBOT_PENILAIAN_V2 } from '../utils/scoring.ts';
+import {
+  calculateJuryScore,
+  BOBOT_PENILAIAN_V2,
+  toggleIncrementStep,
+  clampScore,
+  adjustAspectScore,
+} from '../utils/scoring.ts';
 import { canJuryScoreWork } from '../utils/validation.ts';
+import { generateAutonomousAgentAnalysis } from '../utils/autonomousAgents.ts';
 import { BondowosoVerticalPlayer } from './BondowosoVerticalPlayer.tsx';
 import { JuryCoPilotPanel } from './JuryCoPilotPanel.tsx';
 
@@ -72,29 +85,105 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
     (p) => p.karya_id === selectedKaryaId && p.juri_id === currentJuriId
   );
 
-  // 5 Aspect Scores state
-  const [scores, setScores] = useState<AspectScores>({
-    skor_tema: 85,
-    skor_kreativitas: 85,
-    skor_visual_ai: 85,
-    skor_editing: 85,
-    skor_audio: 85,
-  });
+  // Helper to get initial scores from existing penilaian or AI Co-Judge
+  const getInitialScores = (): AspectScores => {
+    if (existingPenilaian) {
+      return {
+        skor_tema: existingPenilaian.skor_tema,
+        skor_kreativitas: existingPenilaian.skor_kreativitas,
+        skor_visual_ai: existingPenilaian.skor_visual_ai,
+        skor_editing: existingPenilaian.skor_editing,
+        skor_audio: existingPenilaian.skor_audio,
+      };
+    }
+    const card =
+      currentKarya?.ai_analysis?.agent_scorecard ||
+      (currentKarya ? generateAutonomousAgentAnalysis(currentKarya).agent_scorecard : null);
+    if (card) {
+      return {
+        skor_tema: card.ide_konten.score,
+        skor_kreativitas: card.pemanfaatan_ai.score,
+        skor_visual_ai: card.alur_cerita.score,
+        skor_editing: card.kerapian.score,
+        skor_audio: card.kualitas_video.score,
+      };
+    }
+    return {
+      skor_tema: 91,
+      skor_kreativitas: 89,
+      skor_visual_ai: 90,
+      skor_editing: 88,
+      skor_audio: 92,
+    };
+  };
+
+  const getInitialAspectReasons = () => {
+    if (existingPenilaian?.aspect_reasons) {
+      return existingPenilaian.aspect_reasons;
+    }
+    const card =
+      currentKarya?.ai_analysis?.agent_scorecard ||
+      (currentKarya ? generateAutonomousAgentAnalysis(currentKarya).agent_scorecard : null);
+    if (card) {
+      return {
+        ide_konten: card.ide_konten.reason,
+        pemanfaatan_ai: card.pemanfaatan_ai.reason,
+        alur_cerita: card.alur_cerita.reason,
+        kerapian: card.kerapian.reason,
+        kualitas_video: card.kualitas_video.reason,
+      };
+    }
+    return {
+      ide_konten: 'Ide orisinal dan kontekstual dengan potensi daerah.',
+      pemanfaatan_ai: 'Pemanfaatan model AI konsisten.',
+      alur_cerita: 'Alur cerita runtut dan komunikatif.',
+      kerapian: 'Penyuntingan cut-to-cut rapi.',
+      kualitas_video: 'Resolusi dan ketajaman visual baik.',
+    };
+  };
+
+  // 5 Aspect Scores state (initialized dynamically, never flat 85)
+  const [scores, setScores] = useState<AspectScores>(getInitialScores);
 
   // Aspect reasons state (for 6th column in Borang Penilaian Lampiran D.1)
-  const [aspectReasons, setAspectReasons] = useState({
-    ide_konten: '',
-    pemanfaatan_ai: '',
-    alur_cerita: '',
-    kerapian: '',
-    kualitas_video: '',
-  });
+  const [aspectReasons, setAspectReasons] = useState(getInitialAspectReasons);
 
-  const [catatan, setCatatan] = useState<string>('');
-  const [isLocked, setIsLocked] = useState<boolean>(false);
-  const [lastAutosaved, setLastAutosaved] = useState<string | null>(null);
+  const [catatan, setCatatan] = useState<string>(
+    existingPenilaian?.catatan_evaluasi ||
+      currentKarya?.ai_analysis?.agent_scorecard?.alasan_umum ||
+      ''
+  );
+  const [isLocked, setIsLocked] = useState<boolean>(existingPenilaian?.status === 'SUBMITTED');
+  const [lastAutosaved, setLastAutosaved] = useState<string | null>(
+    existingPenilaian?.autosaved_at || null
+  );
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
   const [showHudOverlay, setShowHudOverlay] = useState<boolean>(true);
+
+  // Keyboard shortcut & increment states (PRD V2 Rapid Scoring)
+  const [incrementStep, setIncrementStep] = useState<0.5 | 1.0>(0.5);
+  const [activeAspectKey, setActiveAspectKey] = useState<keyof AspectScores>('skor_tema');
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState<boolean>(false);
+  const [saveDraftToast, setSaveDraftToast] = useState<{
+    visible: boolean;
+    message: string;
+    timestamp: string;
+    scoreSnapshot?: number;
+    karyaId?: string;
+  } | null>(null);
+  const [stepNotification, setStepNotification] = useState<{
+    text: string;
+    step: 0.5 | 1.0;
+  } | null>(null);
+
+  // Direct input DOM refs for aspect keys
+  const inputRefs = useRef<Record<keyof AspectScores, HTMLInputElement | null>>({
+    skor_tema: null,
+    skor_kreativitas: null,
+    skor_visual_ai: null,
+    skor_editing: null,
+    skor_audio: null,
+  });
 
   // Populate form
   useEffect(() => {
@@ -120,26 +209,75 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
       setLastAutosaved(existingPenilaian.autosaved_at || null);
     } else {
       // Pre-fill with Autonomous Co-Judge AI Recommendation (PRD V2 FT-06)
-      const aiCard = currentKarya?.ai_analysis?.agent_scorecard;
-      setScores({
-        skor_tema: aiCard?.ide_konten.score || 85,
-        skor_kreativitas: aiCard?.pemanfaatan_ai.score || 85,
-        skor_visual_ai: aiCard?.alur_cerita.score || 85,
-        skor_editing: aiCard?.kerapian.score || 85,
-        skor_audio: aiCard?.kualitas_video.score || 85,
-      });
-      setAspectReasons({
-        ide_konten: aiCard?.ide_konten.reason || 'Ide cukup menarik dengan mengeksplorasi potensi lokal.',
-        pemanfaatan_ai: aiCard?.pemanfaatan_ai.reason || 'Penggunaan generative AI terlihat stabil.',
-        alur_cerita: aiCard?.alur_cerita.reason || 'Alur cerita runtut dan mudah dipahami.',
-        kerapian: aiCard?.kerapian.reason || 'Penyuntingan cut-to-cut cukup rapi.',
-        kualitas_video: aiCard?.kualitas_video.reason || 'Resolusi dan ketajaman visual baik.',
-      });
-      setCatatan(aiCard?.alasan_umum || '');
+      let aiCard = currentKarya?.ai_analysis?.agent_scorecard;
+      if (!aiCard && currentKarya) {
+        const auto = generateAutonomousAgentAnalysis(currentKarya);
+        aiCard = auto.agent_scorecard;
+      }
+
+      if (aiCard) {
+        setScores({
+          skor_tema: aiCard.ide_konten.score,
+          skor_kreativitas: aiCard.pemanfaatan_ai.score,
+          skor_visual_ai: aiCard.alur_cerita.score,
+          skor_editing: aiCard.kerapian.score,
+          skor_audio: aiCard.kualitas_video.score,
+        });
+        setAspectReasons({
+          ide_konten: aiCard.ide_konten.reason,
+          pemanfaatan_ai: aiCard.pemanfaatan_ai.reason,
+          alur_cerita: aiCard.alur_cerita.reason,
+          kerapian: aiCard.kerapian.reason,
+          kualitas_video: aiCard.kualitas_video.reason,
+        });
+        setCatatan(aiCard.alasan_umum || '');
+      } else {
+        setScores({
+          skor_tema: 90,
+          skor_kreativitas: 88,
+          skor_visual_ai: 89,
+          skor_editing: 87,
+          skor_audio: 91,
+        });
+        setAspectReasons({
+          ide_konten: 'Ide cukup menarik dengan mengeksplorasi potensi lokal.',
+          pemanfaatan_ai: 'Penggunaan generative AI terlihat stabil.',
+          alur_cerita: 'Alur cerita runtut dan mudah dipahami.',
+          kerapian: 'Penyuntingan cut-to-cut cukup rapi.',
+          kualitas_video: 'Resolusi dan ketajaman visual baik.',
+        });
+        setCatatan('');
+      }
       setIsLocked(false);
       setLastAutosaved(null);
     }
   }, [selectedKaryaId, currentJuriId, existingPenilaian, currentKarya]);
+
+  // Apply AI Co-Judge Recommendation on demand
+  const applyAICoJudgeRecommendation = () => {
+    let aiCard = currentKarya?.ai_analysis?.agent_scorecard;
+    if (!aiCard && currentKarya) {
+      const auto = generateAutonomousAgentAnalysis(currentKarya);
+      aiCard = auto.agent_scorecard;
+    }
+    if (aiCard) {
+      setScores({
+        skor_tema: aiCard.ide_konten.score,
+        skor_kreativitas: aiCard.pemanfaatan_ai.score,
+        skor_visual_ai: aiCard.alur_cerita.score,
+        skor_editing: aiCard.kerapian.score,
+        skor_audio: aiCard.kualitas_video.score,
+      });
+      setAspectReasons({
+        ide_konten: aiCard.ide_konten.reason,
+        pemanfaatan_ai: aiCard.pemanfaatan_ai.reason,
+        alur_cerita: aiCard.alur_cerita.reason,
+        kerapian: aiCard.kerapian.reason,
+        kualitas_video: aiCard.kualitas_video.reason,
+      });
+      setCatatan(aiCard.alasan_umum || '');
+    }
+  };
 
   // Check Rule-01
   const isScorable = currentKarya
@@ -148,6 +286,65 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
 
   // Live total score
   const liveTotalSkor = calculateJuryScore(scores);
+
+  // Quick score adjustments by delta (clamped 0 - 100, 1 decimal place)
+  const adjustScore = (key: keyof AspectScores, delta: number) => {
+    if (isLocked || !isScorable) return;
+    setActiveAspectKey(key);
+    setScores((prev) => {
+      const clamped = adjustAspectScore(prev[key], delta);
+      return { ...prev, [key]: clamped };
+    });
+  };
+
+  // Toggle increment step (+0.5 <-> +1.0) with rapid visual feedback
+  const handleToggleIncrementStep = () => {
+    const next = toggleIncrementStep(incrementStep);
+    setIncrementStep(next);
+    setStepNotification({
+      text: `Interval Nilai: +${next.toFixed(1)}`,
+      step: next,
+    });
+    setTimeout(() => {
+      setStepNotification((prev) => (prev?.step === next ? null : prev));
+    }, 2200);
+  };
+
+  // Explicit Manual Save Draft (triggered via button, Ctrl + S, or 'D')
+  const handleManualSaveDraft = () => {
+    if (isLocked || !isScorable || !currentKarya) return;
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const draftObj: PenilaianJuri = {
+      id: existingPenilaian?.id || `PEN-${Date.now()}`,
+      karya_id: currentKarya.id,
+      juri_id: currentJuriId,
+      juri_nama: currentJuriName,
+      juri_peran: 'Dewan Juri',
+      skor_tema: scores.skor_tema,
+      skor_kreativitas: scores.skor_kreativitas,
+      skor_visual_ai: scores.skor_visual_ai,
+      skor_editing: scores.skor_editing,
+      skor_audio: scores.skor_audio,
+      total_skor: liveTotalSkor,
+      catatan_evaluasi: catatan,
+      aspect_reasons: aspectReasons,
+      status: 'DRAFT',
+      autosaved_at: now.toISOString(),
+    };
+    onSaveDraft(draftObj);
+    setLastAutosaved(timeStr);
+    setSaveDraftToast({
+      visible: true,
+      message: 'Draf Penilaian Berhasil Disimpan!',
+      timestamp: timeStr,
+      scoreSnapshot: liveTotalSkor,
+      karyaId: currentKarya.id,
+    });
+    setTimeout(() => {
+      setSaveDraftToast((prev) => (prev?.timestamp === timeStr ? null : prev));
+    }, 3500);
+  };
 
   // Autosave Draft every 5s (NFR-04)
   useEffect(() => {
@@ -179,6 +376,153 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
 
     return () => clearInterval(timer);
   }, [scores, aspectReasons, catatan, isLocked, isScorable, currentKarya, currentJuriId, currentJuriName, liveTotalSkor, existingPenilaian, onSaveDraft]);
+
+  // Keyboard Shortcuts Listener for high-volume evaluation efficiency
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 1. Save draft: Ctrl + S, Cmd + S, or Alt + S
+      if (((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) || (e.altKey && (e.key === 's' || e.key === 'S'))) {
+        e.preventDefault();
+        handleManualSaveDraft();
+        return;
+      }
+
+      // Close open modals on Escape
+      if (e.key === 'Escape') {
+        if (showShortcutsHelp) {
+          e.preventDefault();
+          setShowShortcutsHelp(false);
+          return;
+        }
+        if (showSubmitModal) {
+          e.preventDefault();
+          setShowSubmitModal(false);
+          return;
+        }
+      }
+
+      // 2. Submit Final: Ctrl + Enter or Cmd + Enter
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        if (!isLocked && isScorable) {
+          setShowSubmitModal(true);
+        }
+        return;
+      }
+
+      // Target element inspection
+      const target = e.target as HTMLElement | null;
+      const isTypingText =
+        target &&
+        (target.tagName === 'TEXTAREA' ||
+          (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'text'));
+
+      if (isTypingText) return;
+
+      // When inside number input, handle ArrowUp / ArrowDown using incrementStep
+      if (target && target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'number') {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          adjustScore(activeAspectKey, +incrementStep);
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          adjustScore(activeAspectKey, -incrementStep);
+          return;
+        }
+      }
+
+      // 3. Toggle increment step between +0.5 and +1.0 (Key 'i' or 'I')
+      if (e.key === 'i' || e.key === 'I') {
+        e.preventDefault();
+        handleToggleIncrementStep();
+        return;
+      }
+
+      // 4. Quick single-key save draft: 'd' or 'D'
+      if (e.key === 'd' || e.key === 'D') {
+        e.preventDefault();
+        handleManualSaveDraft();
+        return;
+      }
+
+      // 5. Toggle Keyboard Shortcuts Help modal (Key '?' or Shift + '/')
+      if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+        e.preventDefault();
+        setShowShortcutsHelp((prev) => !prev);
+        return;
+      }
+
+      // 6. ArrowUp / '+' / '=' and ArrowDown / '-' / '_' to adjust score of active aspect
+      if (e.key === 'ArrowUp' || e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        adjustScore(activeAspectKey, +incrementStep);
+        return;
+      }
+      if (e.key === 'ArrowDown' || e.key === '-' || e.key === '_') {
+        e.preventDefault();
+        adjustScore(activeAspectKey, -incrementStep);
+        return;
+      }
+
+      // 7. Navigate Karyas in queue: '[' (prev) and ']' (next)
+      if (e.key === '[') {
+        e.preventDefault();
+        const currIdx = karyas.findIndex((k) => k.id === selectedKaryaId);
+        if (currIdx > 0) {
+          setSelectedKaryaId(karyas[currIdx - 1].id);
+        }
+        return;
+      }
+      if (e.key === ']') {
+        e.preventDefault();
+        const currIdx = karyas.findIndex((k) => k.id === selectedKaryaId);
+        if (currIdx >= 0 && currIdx < karyas.length - 1) {
+          setSelectedKaryaId(karyas[currIdx + 1].id);
+        }
+        return;
+      }
+
+      // 8. Number keys 1-5: Focus on Aspect 1 to 5
+      if (['1', '2', '3', '4', '5'].includes(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const aspectMap: Record<string, keyof AspectScores> = {
+          '1': 'skor_tema',
+          '2': 'skor_kreativitas',
+          '3': 'skor_visual_ai',
+          '4': 'skor_editing',
+          '5': 'skor_audio',
+        };
+        const aspectKey = aspectMap[e.key];
+        if (aspectKey) {
+          setActiveAspectKey(aspectKey);
+          inputRefs.current[aspectKey]?.focus();
+          inputRefs.current[aspectKey]?.select();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    isLocked,
+    isScorable,
+    currentKarya,
+    scores,
+    aspectReasons,
+    catatan,
+    existingPenilaian,
+    liveTotalSkor,
+    karyas,
+    selectedKaryaId,
+    currentJuriId,
+    currentJuriName,
+    onSaveDraft,
+    incrementStep,
+    activeAspectKey,
+    showShortcutsHelp,
+    showSubmitModal,
+  ]);
 
   // Handle Confirm Final Submit (AC-03)
   const handleConfirmSubmit = () => {
@@ -403,6 +747,127 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
             {/* TAB 1: STANDAR BORANG PENILAIAN 6 KOLOM RESMI (Lampiran D.1) */}
             {activeRightTab === 'borang' && (
               <div className={`space-y-4 ${!isScorable || isLocked ? 'opacity-80' : ''}`}>
+                {/* AI Co-Judge Recommendation Bar (PRD V2 FT-06) */}
+                <div className="bg-gradient-to-r from-indigo-950/70 via-slate-900 to-purple-950/40 border border-indigo-500/30 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
+                  <div className="flex items-center space-x-2.5">
+                    <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
+                    <div>
+                      <div className="font-bold text-xs text-indigo-200">
+                        Rekomendasi Penilaian AI Co-Judge (5 Aspek Juknis)
+                      </div>
+                      <div className="text-[11px] text-slate-300">
+                        Skor AI Rekomendasi:{' '}
+                        <strong className="text-amber-400 font-mono">
+                          {currentKarya?.ai_analysis?.agent_scorecard?.total_score || calculateJuryScore(scores)} / 100
+                        </strong>{' '}
+                        • Ide: {currentKarya?.ai_analysis?.agent_scorecard?.ide_konten.score || scores.skor_tema} | AI:{' '}
+                        {currentKarya?.ai_analysis?.agent_scorecard?.pemanfaatan_ai.score || scores.skor_kreativitas} | Alur:{' '}
+                        {currentKarya?.ai_analysis?.agent_scorecard?.alur_cerita.score || scores.skor_visual_ai} | Kerapian:{' '}
+                        {currentKarya?.ai_analysis?.agent_scorecard?.kerapian.score || scores.skor_editing} | Kualitas:{' '}
+                        {currentKarya?.ai_analysis?.agent_scorecard?.kualitas_video.score || scores.skor_audio}
+                      </div>
+                    </div>
+                  </div>
+                  {!isLocked && isScorable && (
+                    <button
+                      type="button"
+                      onClick={applyAICoJudgeRecommendation}
+                      className="px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white flex items-center space-x-1.5 shrink-0 transition-colors shadow-sm"
+                      title="Salin skor dan narasi rekomendasi AI ke dalam borang dewan juri"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Terapkan Rekomendasi AI</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Rapid Scoring & Keyboard Shortcuts Toolbar */}
+                <div className="flex flex-wrap items-center justify-between gap-2.5 bg-slate-950 p-3 rounded-xl border border-slate-800 shadow-inner">
+                  <div className="flex items-center space-x-2.5">
+                    <span className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                      <Sliders className="w-3.5 h-3.5 text-amber-400" />
+                      Interval Nilai (Step):
+                    </span>
+                    {/* Toggle +0.5 vs +1.0 */}
+                    <div className="flex items-center bg-slate-900 p-0.5 rounded-lg border border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIncrementStep(0.5);
+                          setStepNotification({ text: 'Interval Nilai: +0.5', step: 0.5 });
+                          setTimeout(() => setStepNotification((prev) => (prev?.step === 0.5 ? null : prev)), 2000);
+                        }}
+                        className={`px-2.5 py-1 rounded-md text-xs font-mono font-bold transition-all ${
+                          incrementStep === 0.5
+                            ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/30'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                        title="Ubah interval kenaikan menjadi +0.5 (Shortcut: I)"
+                      >
+                        +0.5
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIncrementStep(1.0);
+                          setStepNotification({ text: 'Interval Nilai: +1.0', step: 1.0 });
+                          setTimeout(() => setStepNotification((prev) => (prev?.step === 1.0 ? null : prev)), 2000);
+                        }}
+                        className={`px-2.5 py-1 rounded-md text-xs font-mono font-bold transition-all ${
+                          incrementStep === 1.0
+                            ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/30'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                        title="Ubah interval kenaikan menjadi +1.0 (Shortcut: I)"
+                      >
+                        +1.0
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleToggleIncrementStep}
+                      className="text-[10px] text-slate-300 font-mono bg-slate-900 hover:bg-slate-800 px-2 py-0.5 rounded border border-slate-800 transition-colors cursor-pointer"
+                      title="Klik atau tekan I untuk berganti antara +0.5 dan +1.0"
+                    >
+                      Tekan <kbd className="text-amber-300 font-bold">I</kbd> untuk ganti
+                    </button>
+                  </div>
+
+                  {/* Shortcuts Helper & Quick Save */}
+                  <div className="flex items-center space-x-2">
+                    {lastAutosaved && (
+                      <span className="text-[10px] text-slate-400 font-mono hidden md:inline-flex items-center gap-1 bg-slate-900/60 px-2 py-1 rounded-lg border border-slate-800">
+                        <Clock className="w-3 h-3 text-emerald-400" />
+                        <span>Tersimpan: {lastAutosaved}</span>
+                      </span>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setShowShortcutsHelp(true)}
+                      className="px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-300 bg-slate-900 hover:bg-slate-800 border border-slate-800 flex items-center space-x-1.5 transition-colors"
+                      title="Buka panduan shortcut keyboard (?)"
+                    >
+                      <Keyboard className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Shortcut</span>
+                      <kbd className="bg-slate-800 text-[10px] font-mono px-1 rounded text-slate-300">?</kbd>
+                    </button>
+
+                    {!isLocked && isScorable && (
+                      <button
+                        type="button"
+                        onClick={handleManualSaveDraft}
+                        className="px-3 py-1 rounded-lg text-xs font-bold text-emerald-300 bg-emerald-950/70 hover:bg-emerald-900/70 border border-emerald-600/50 flex items-center space-x-1.5 transition-all shadow-sm"
+                        title="Simpan draf sekarang (Shortcut: Ctrl + S atau D)"
+                      >
+                        <Save className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Simpan Draf</span>
+                        <kbd className="bg-emerald-900/80 text-[10px] font-mono px-1 rounded text-emerald-200">Ctrl+S / D</kbd>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
                 <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/80">
                   <table className="w-full text-left text-xs border-collapse">
                     <thead>
@@ -411,16 +876,25 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
                         <th className="py-2.5 px-3 w-40">Aspek Penilaian</th>
                         <th className="py-2.5 px-2 w-16 text-center">Bobot</th>
                         <th className="py-2.5 px-3">Indikator Penilaian (Juknis)</th>
-                        <th className="py-2.5 px-3 w-28 text-center">Nilai (1-100)</th>
+                        <th className="py-2.5 px-3 w-36 text-center">Nilai (1-100)</th>
                         <th className="py-2.5 px-3 w-64">Alasan Penilaian (Catatan Juri)</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800 text-slate-300">
                       {/* Aspek 1: Ide Konten (25%) */}
-                      <tr className="hover:bg-slate-900/50">
-                        <td className="py-3 px-3 text-center font-bold">1</td>
+                      <tr className={`hover:bg-slate-900/50 transition-colors ${activeAspectKey === 'skor_tema' ? 'bg-indigo-950/40 border-l-4 border-l-amber-400' : 'border-l-4 border-l-transparent'}`}>
+                        <td className="py-3 px-3 text-center font-bold">
+                          <span className={`inline-block w-5 h-5 leading-5 rounded-full font-mono text-[10px] ${activeAspectKey === 'skor_tema' ? 'bg-amber-500 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'}`}>
+                            1
+                          </span>
+                        </td>
                         <td className="py-3 px-3 font-bold text-slate-100">
-                          Ide Konten
+                          <div className="flex items-center space-x-1.5">
+                            <span>Ide Konten</span>
+                            <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-slate-800 text-slate-400" title="Shortcut tombol 1">
+                              [1]
+                            </span>
+                          </div>
                         </td>
                         <td className="py-3 px-2 text-center font-mono text-indigo-400 font-bold">
                           0.25
@@ -429,15 +903,40 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
                           Orisinalitas ide, kreativitas mengembangkan tema subtema, kejelasan pesan, daya tarik konsep.
                         </td>
                         <td className="py-3 px-3 text-center">
-                          <input
-                            type="number"
-                            min={1}
-                            max={100}
-                            disabled={!isScorable || isLocked}
-                            value={scores.skor_tema}
-                            onChange={(e) => setScores({ ...scores, skor_tema: Number(e.target.value) })}
-                            className="w-16 bg-slate-800 text-center font-mono font-bold text-sm text-amber-400 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500"
-                          />
+                          <div className="flex items-center justify-center space-x-1">
+                            <button
+                              type="button"
+                              disabled={!isScorable || isLocked}
+                              onClick={() => adjustScore('skor_tema', -incrementStep)}
+                              className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-300 font-mono font-bold text-xs flex items-center justify-center border border-slate-700 transition-colors disabled:opacity-40"
+                              title={`Kurangi nilai -${incrementStep} (Shortcut: ↓ atau -)`}
+                            >
+                              -
+                            </button>
+                            <input
+                              ref={(el) => {
+                                inputRefs.current.skor_tema = el;
+                              }}
+                              type="number"
+                              min={0}
+                              max={100}
+                              step={incrementStep}
+                              disabled={!isScorable || isLocked}
+                              value={scores.skor_tema}
+                              onFocus={() => setActiveAspectKey('skor_tema')}
+                              onChange={(e) => setScores({ ...scores, skor_tema: Number(e.target.value) })}
+                              className="w-16 bg-slate-800 text-center font-mono font-bold text-sm text-amber-400 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                            />
+                            <button
+                              type="button"
+                              disabled={!isScorable || isLocked}
+                              onClick={() => adjustScore('skor_tema', +incrementStep)}
+                              className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-300 font-mono font-bold text-xs flex items-center justify-center border border-slate-700 transition-colors disabled:opacity-40"
+                              title={`Tambah nilai +${incrementStep} (Shortcut: ↑ atau +)`}
+                            >
+                              +
+                            </button>
+                          </div>
                         </td>
                         <td className="py-3 px-3">
                           <textarea
@@ -452,10 +951,19 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
                       </tr>
 
                       {/* Aspek 2: Pemanfaatan Teknologi AI (20%) */}
-                      <tr className="hover:bg-slate-900/50">
-                        <td className="py-3 px-3 text-center font-bold">2</td>
+                      <tr className={`hover:bg-slate-900/50 transition-colors ${activeAspectKey === 'skor_kreativitas' ? 'bg-indigo-950/40 border-l-4 border-l-amber-400' : 'border-l-4 border-l-transparent'}`}>
+                        <td className="py-3 px-3 text-center font-bold">
+                          <span className={`inline-block w-5 h-5 leading-5 rounded-full font-mono text-[10px] ${activeAspectKey === 'skor_kreativitas' ? 'bg-amber-500 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'}`}>
+                            2
+                          </span>
+                        </td>
                         <td className="py-3 px-3 font-bold text-slate-100">
-                          Pemanfaatan Teknologi AI
+                          <div className="flex items-center space-x-1.5">
+                            <span>Pemanfaatan AI</span>
+                            <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-slate-800 text-slate-400" title="Shortcut tombol 2">
+                              [2]
+                            </span>
+                          </div>
                         </td>
                         <td className="py-3 px-2 text-center font-mono text-indigo-400 font-bold">
                           0.20
@@ -464,15 +972,40 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
                           Pemanfaatan AI optimal, konsistensi visual antaradegan, kehalusan render prompt AI, integrasi harmonis.
                         </td>
                         <td className="py-3 px-3 text-center">
-                          <input
-                            type="number"
-                            min={1}
-                            max={100}
-                            disabled={!isScorable || isLocked}
-                            value={scores.skor_kreativitas}
-                            onChange={(e) => setScores({ ...scores, skor_kreativitas: Number(e.target.value) })}
-                            className="w-16 bg-slate-800 text-center font-mono font-bold text-sm text-amber-400 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500"
-                          />
+                          <div className="flex items-center justify-center space-x-1">
+                            <button
+                              type="button"
+                              disabled={!isScorable || isLocked}
+                              onClick={() => adjustScore('skor_kreativitas', -incrementStep)}
+                              className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-300 font-mono font-bold text-xs flex items-center justify-center border border-slate-700 transition-colors disabled:opacity-40"
+                              title={`Kurangi nilai -${incrementStep} (Shortcut: ↓ atau -)`}
+                            >
+                              -
+                            </button>
+                            <input
+                              ref={(el) => {
+                                inputRefs.current.skor_kreativitas = el;
+                              }}
+                              type="number"
+                              min={0}
+                              max={100}
+                              step={incrementStep}
+                              disabled={!isScorable || isLocked}
+                              value={scores.skor_kreativitas}
+                              onFocus={() => setActiveAspectKey('skor_kreativitas')}
+                              onChange={(e) => setScores({ ...scores, skor_kreativitas: Number(e.target.value) })}
+                              className="w-16 bg-slate-800 text-center font-mono font-bold text-sm text-amber-400 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                            />
+                            <button
+                              type="button"
+                              disabled={!isScorable || isLocked}
+                              onClick={() => adjustScore('skor_kreativitas', +incrementStep)}
+                              className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-300 font-mono font-bold text-xs flex items-center justify-center border border-slate-700 transition-colors disabled:opacity-40"
+                              title={`Tambah nilai +${incrementStep} (Shortcut: ↑ atau +)`}
+                            >
+                              +
+                            </button>
+                          </div>
                         </td>
                         <td className="py-3 px-3">
                           <textarea
@@ -487,10 +1020,19 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
                       </tr>
 
                       {/* Aspek 3: Alur Cerita (20%) */}
-                      <tr className="hover:bg-slate-900/50">
-                        <td className="py-3 px-3 text-center font-bold">3</td>
+                      <tr className={`hover:bg-slate-900/50 transition-colors ${activeAspectKey === 'skor_visual_ai' ? 'bg-indigo-950/40 border-l-4 border-l-amber-400' : 'border-l-4 border-l-transparent'}`}>
+                        <td className="py-3 px-3 text-center font-bold">
+                          <span className={`inline-block w-5 h-5 leading-5 rounded-full font-mono text-[10px] ${activeAspectKey === 'skor_visual_ai' ? 'bg-amber-500 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'}`}>
+                            3
+                          </span>
+                        </td>
                         <td className="py-3 px-3 font-bold text-slate-100">
-                          Alur Cerita
+                          <div className="flex items-center space-x-1.5">
+                            <span>Alur Cerita</span>
+                            <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-slate-800 text-slate-400" title="Shortcut tombol 3">
+                              [3]
+                            </span>
+                          </div>
                         </td>
                         <td className="py-3 px-2 text-center font-mono text-indigo-400 font-bold">
                           0.20
@@ -499,15 +1041,40 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
                           Alur cerita runtut, keterkaitan logis antaradegan, daya tarik penonton dari awal hingga akhir, closing efektif.
                         </td>
                         <td className="py-3 px-3 text-center">
-                          <input
-                            type="number"
-                            min={1}
-                            max={100}
-                            disabled={!isScorable || isLocked}
-                            value={scores.skor_visual_ai}
-                            onChange={(e) => setScores({ ...scores, skor_visual_ai: Number(e.target.value) })}
-                            className="w-16 bg-slate-800 text-center font-mono font-bold text-sm text-amber-400 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500"
-                          />
+                          <div className="flex items-center justify-center space-x-1">
+                            <button
+                              type="button"
+                              disabled={!isScorable || isLocked}
+                              onClick={() => adjustScore('skor_visual_ai', -incrementStep)}
+                              className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-300 font-mono font-bold text-xs flex items-center justify-center border border-slate-700 transition-colors disabled:opacity-40"
+                              title={`Kurangi nilai -${incrementStep} (Shortcut: ↓ atau -)`}
+                            >
+                              -
+                            </button>
+                            <input
+                              ref={(el) => {
+                                inputRefs.current.skor_visual_ai = el;
+                              }}
+                              type="number"
+                              min={0}
+                              max={100}
+                              step={incrementStep}
+                              disabled={!isScorable || isLocked}
+                              value={scores.skor_visual_ai}
+                              onFocus={() => setActiveAspectKey('skor_visual_ai')}
+                              onChange={(e) => setScores({ ...scores, skor_visual_ai: Number(e.target.value) })}
+                              className="w-16 bg-slate-800 text-center font-mono font-bold text-sm text-amber-400 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                            />
+                            <button
+                              type="button"
+                              disabled={!isScorable || isLocked}
+                              onClick={() => adjustScore('skor_visual_ai', +incrementStep)}
+                              className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-300 font-mono font-bold text-xs flex items-center justify-center border border-slate-700 transition-colors disabled:opacity-40"
+                              title={`Tambah nilai +${incrementStep} (Shortcut: ↑ atau +)`}
+                            >
+                              +
+                            </button>
+                          </div>
                         </td>
                         <td className="py-3 px-3">
                           <textarea
@@ -522,10 +1089,19 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
                       </tr>
 
                       {/* Aspek 4: Kerapian Pengerjaan Konten (15%) */}
-                      <tr className="hover:bg-slate-900/50">
-                        <td className="py-3 px-3 text-center font-bold">4</td>
+                      <tr className={`hover:bg-slate-900/50 transition-colors ${activeAspectKey === 'skor_editing' ? 'bg-indigo-950/40 border-l-4 border-l-amber-400' : 'border-l-4 border-l-transparent'}`}>
+                        <td className="py-3 px-3 text-center font-bold">
+                          <span className={`inline-block w-5 h-5 leading-5 rounded-full font-mono text-[10px] ${activeAspectKey === 'skor_editing' ? 'bg-amber-500 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'}`}>
+                            4
+                          </span>
+                        </td>
                         <td className="py-3 px-3 font-bold text-slate-100">
-                          Kerapian Pengerjaan
+                          <div className="flex items-center space-x-1.5">
+                            <span>Kerapian</span>
+                            <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-slate-800 text-slate-400" title="Shortcut tombol 4">
+                              [4]
+                            </span>
+                          </div>
                         </td>
                         <td className="py-3 px-2 text-center font-mono text-indigo-400 font-bold">
                           0.15
@@ -534,15 +1110,40 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
                           Kerapian proses editing, transisi, efek subtitle, sinkronisasi visual dan audio, kenyamanan tempo (pacing).
                         </td>
                         <td className="py-3 px-3 text-center">
-                          <input
-                            type="number"
-                            min={1}
-                            max={100}
-                            disabled={!isScorable || isLocked}
-                            value={scores.skor_editing}
-                            onChange={(e) => setScores({ ...scores, skor_editing: Number(e.target.value) })}
-                            className="w-16 bg-slate-800 text-center font-mono font-bold text-sm text-amber-400 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500"
-                          />
+                          <div className="flex items-center justify-center space-x-1">
+                            <button
+                              type="button"
+                              disabled={!isScorable || isLocked}
+                              onClick={() => adjustScore('skor_editing', -incrementStep)}
+                              className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-300 font-mono font-bold text-xs flex items-center justify-center border border-slate-700 transition-colors disabled:opacity-40"
+                              title={`Kurangi nilai -${incrementStep} (Shortcut: ↓ atau -)`}
+                            >
+                              -
+                            </button>
+                            <input
+                              ref={(el) => {
+                                inputRefs.current.skor_editing = el;
+                              }}
+                              type="number"
+                              min={0}
+                              max={100}
+                              step={incrementStep}
+                              disabled={!isScorable || isLocked}
+                              value={scores.skor_editing}
+                              onFocus={() => setActiveAspectKey('skor_editing')}
+                              onChange={(e) => setScores({ ...scores, skor_editing: Number(e.target.value) })}
+                              className="w-16 bg-slate-800 text-center font-mono font-bold text-sm text-amber-400 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                            />
+                            <button
+                              type="button"
+                              disabled={!isScorable || isLocked}
+                              onClick={() => adjustScore('skor_editing', +incrementStep)}
+                              className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-300 font-mono font-bold text-xs flex items-center justify-center border border-slate-700 transition-colors disabled:opacity-40"
+                              title={`Tambah nilai +${incrementStep} (Shortcut: ↑ atau +)`}
+                            >
+                              +
+                            </button>
+                          </div>
                         </td>
                         <td className="py-3 px-3">
                           <textarea
@@ -557,10 +1158,19 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
                       </tr>
 
                       {/* Aspek 5: Kualitas Video (20%) */}
-                      <tr className="hover:bg-slate-900/50">
-                        <td className="py-3 px-3 text-center font-bold">5</td>
+                      <tr className={`hover:bg-slate-900/50 transition-colors ${activeAspectKey === 'skor_audio' ? 'bg-indigo-950/40 border-l-4 border-l-amber-400' : 'border-l-4 border-l-transparent'}`}>
+                        <td className="py-3 px-3 text-center font-bold">
+                          <span className={`inline-block w-5 h-5 leading-5 rounded-full font-mono text-[10px] ${activeAspectKey === 'skor_audio' ? 'bg-amber-500 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'}`}>
+                            5
+                          </span>
+                        </td>
                         <td className="py-3 px-3 font-bold text-slate-100">
-                          Kualitas Video
+                          <div className="flex items-center space-x-1.5">
+                            <span>Kualitas Video</span>
+                            <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-slate-800 text-slate-400" title="Shortcut tombol 5">
+                              [5]
+                            </span>
+                          </div>
                         </td>
                         <td className="py-3 px-2 text-center font-mono text-indigo-400 font-bold">
                           0.20
@@ -569,15 +1179,40 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
                           Ketajaman visual, estetika tampilan, kualitas audio jelas & nyaman, konsistensi visual awal hingga akhir.
                         </td>
                         <td className="py-3 px-3 text-center">
-                          <input
-                            type="number"
-                            min={1}
-                            max={100}
-                            disabled={!isScorable || isLocked}
-                            value={scores.skor_audio}
-                            onChange={(e) => setScores({ ...scores, skor_audio: Number(e.target.value) })}
-                            className="w-16 bg-slate-800 text-center font-mono font-bold text-sm text-amber-400 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500"
-                          />
+                          <div className="flex items-center justify-center space-x-1">
+                            <button
+                              type="button"
+                              disabled={!isScorable || isLocked}
+                              onClick={() => adjustScore('skor_audio', -incrementStep)}
+                              className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-300 font-mono font-bold text-xs flex items-center justify-center border border-slate-700 transition-colors disabled:opacity-40"
+                              title={`Kurangi nilai -${incrementStep} (Shortcut: ↓ atau -)`}
+                            >
+                              -
+                            </button>
+                            <input
+                              ref={(el) => {
+                                inputRefs.current.skor_audio = el;
+                              }}
+                              type="number"
+                              min={0}
+                              max={100}
+                              step={incrementStep}
+                              disabled={!isScorable || isLocked}
+                              value={scores.skor_audio}
+                              onFocus={() => setActiveAspectKey('skor_audio')}
+                              onChange={(e) => setScores({ ...scores, skor_audio: Number(e.target.value) })}
+                              className="w-16 bg-slate-800 text-center font-mono font-bold text-sm text-amber-400 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                            />
+                            <button
+                              type="button"
+                              disabled={!isScorable || isLocked}
+                              onClick={() => adjustScore('skor_audio', +incrementStep)}
+                              className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-300 font-mono font-bold text-xs flex items-center justify-center border border-slate-700 transition-colors disabled:opacity-40"
+                              title={`Tambah nilai +${incrementStep} (Shortcut: ↑ atau +)`}
+                            >
+                              +
+                            </button>
+                          </div>
                         </td>
                         <td className="py-3 px-3">
                           <textarea
@@ -749,6 +1384,250 @@ export const JuryScoringPanel: React.FC<JuryScoringPanelProps> = ({
                 Ya, Submit Final
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Keyboard Shortcuts Help Modal (PRD V2 Rapid Scoring) */}
+      {showShortcutsHelp && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl space-y-6 text-slate-100 animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="flex items-start justify-between pb-4 border-b border-slate-800">
+              <div className="flex items-center space-x-3.5">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+                  <Keyboard className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-100 flex items-center gap-2">
+                    Shortcut Keyboard Dewan Juri
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
+                      Rapid Scoring v2.0
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Akselerasi evaluasi berkecepatan tinggi tanpa perlu memindahkan tangan ke mouse.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowShortcutsHelp(false)}
+                className="text-slate-400 hover:text-slate-200 p-2 rounded-xl hover:bg-slate-800 transition-colors"
+                title="Tutup (Esc)"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* 3 Shortcut Categories */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+              {/* Category 1: Interval & Penilaian */}
+              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
+                <div className="font-bold text-amber-400 flex items-center space-x-2 text-[11px] uppercase tracking-wider">
+                  <Sliders className="w-4 h-4" />
+                  <span>Interval & Nilai</span>
+                </div>
+                <ul className="space-y-2.5 text-slate-300">
+                  <li className="flex items-center justify-between">
+                    <span className="text-slate-400">Toggle Interval</span>
+                    <kbd className="px-2 py-1 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-amber-300 text-[11px]">
+                      I
+                    </kbd>
+                  </li>
+                  <li className="text-[10px] text-slate-400 italic">
+                    Ganti cepat antara +0.5 ⇋ +1.0
+                  </li>
+                  <li className="flex items-center justify-between pt-1 border-t border-slate-800/80">
+                    <span className="text-slate-400">Tambah Skor</span>
+                    <div className="flex gap-1">
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-slate-200 text-[11px]">
+                        ↑
+                      </kbd>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-slate-200 text-[11px]">
+                        +
+                      </kbd>
+                    </div>
+                  </li>
+                  <li className="flex items-center justify-between">
+                    <span className="text-slate-400">Kurangi Skor</span>
+                    <div className="flex gap-1">
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-slate-200 text-[11px]">
+                        ↓
+                      </kbd>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-slate-200 text-[11px]">
+                        -
+                      </kbd>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+
+              {/* Category 2: Navigasi Aspek & Antrean */}
+              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
+                <div className="font-bold text-indigo-400 flex items-center space-x-2 text-[11px] uppercase tracking-wider">
+                  <Layers className="w-4 h-4" />
+                  <span>Navigasi Aspek</span>
+                </div>
+                <ul className="space-y-2.5 text-slate-300">
+                  <li className="flex items-center justify-between">
+                    <span className="text-slate-400">Ide Konten</span>
+                    <kbd className="px-2 py-1 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-indigo-300 text-[11px]">
+                      1
+                    </kbd>
+                  </li>
+                  <li className="flex items-center justify-between">
+                    <span className="text-slate-400">Pemanfaatan AI</span>
+                    <kbd className="px-2 py-1 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-indigo-300 text-[11px]">
+                      2
+                    </kbd>
+                  </li>
+                  <li className="flex items-center justify-between">
+                    <span className="text-slate-400">Alur Cerita</span>
+                    <kbd className="px-2 py-1 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-indigo-300 text-[11px]">
+                      3
+                    </kbd>
+                  </li>
+                  <li className="flex items-center justify-between">
+                    <span className="text-slate-400">Kerapian</span>
+                    <kbd className="px-2 py-1 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-indigo-300 text-[11px]">
+                      4
+                    </kbd>
+                  </li>
+                  <li className="flex items-center justify-between">
+                    <span className="text-slate-400">Kualitas Video</span>
+                    <kbd className="px-2 py-1 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-indigo-300 text-[11px]">
+                      5
+                    </kbd>
+                  </li>
+                  <li className="flex items-center justify-between pt-1 border-t border-slate-800/80">
+                    <span className="text-slate-400">Video Antrean</span>
+                    <div className="flex gap-1">
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-slate-200 text-[11px]">
+                        [
+                      </kbd>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-slate-200 text-[11px]">
+                        ]
+                      </kbd>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+
+              {/* Category 3: Simpan Draf & Finalisasi */}
+              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
+                <div className="font-bold text-emerald-400 flex items-center space-x-2 text-[11px] uppercase tracking-wider">
+                  <Save className="w-4 h-4" />
+                  <span>Simpan & Kunci</span>
+                </div>
+                <ul className="space-y-2.5 text-slate-300">
+                  <li className="flex items-center justify-between">
+                    <span className="text-slate-400">Simpan Draf</span>
+                    <kbd className="px-2 py-1 rounded bg-emerald-950 border border-emerald-700 font-mono font-bold text-emerald-300 text-[11px]">
+                      Ctrl + S
+                    </kbd>
+                  </li>
+                  <li className="flex items-center justify-between">
+                    <span className="text-slate-400">Simpan Cepat</span>
+                    <kbd className="px-2 py-1 rounded bg-emerald-950 border border-emerald-700 font-mono font-bold text-emerald-300 text-[11px]">
+                      D
+                    </kbd>
+                  </li>
+                  <li className="flex items-center justify-between pt-1 border-t border-slate-800/80">
+                    <span className="text-slate-400">Submit Final</span>
+                    <kbd className="px-2 py-1 rounded bg-indigo-950 border border-indigo-700 font-mono font-bold text-indigo-300 text-[11px]">
+                      Ctrl + Enter
+                    </kbd>
+                  </li>
+                  <li className="flex items-center justify-between">
+                    <span className="text-slate-400">Bantuan Shortcut</span>
+                    <kbd className="px-2 py-1 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-slate-200 text-[11px]">
+                      ?
+                    </kbd>
+                  </li>
+                  <li className="flex items-center justify-between">
+                    <span className="text-slate-400">Tutup Modal</span>
+                    <kbd className="px-2 py-1 rounded bg-slate-800 border border-slate-700 font-mono font-bold text-slate-200 text-[11px]">
+                      Esc
+                    </kbd>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            {/* Bottom Actions */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800 text-xs">
+              <span className="text-[11px] text-slate-400">
+                Tip: Seluruh perubahan nilai tersimpan otomatis tiap 5 detik dan draf manual dapat disimpan instan dengan <strong className="text-emerald-400 font-mono">Ctrl + S</strong> atau <strong className="text-emerald-400 font-mono">D</strong>.
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowShortcutsHelp(false)}
+                className="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold transition-colors cursor-pointer"
+              >
+                Tutup (Esc)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Save Draft Toast Notification */}
+      {saveDraftToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 right-6 z-50 max-w-md bg-slate-900/95 border-2 border-emerald-500/70 backdrop-blur-md rounded-2xl p-4 shadow-2xl shadow-emerald-950/60 flex items-start space-x-3.5 animate-in fade-in slide-in-from-bottom-5 duration-200"
+        >
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center shrink-0 text-emerald-400">
+            <CheckCircle className="w-5 h-5" />
+          </div>
+          <div className="flex-1 min-w-0 pr-1">
+            <div className="flex items-center space-x-2">
+              <h5 className="text-xs font-black text-emerald-300">
+                {saveDraftToast.message}
+              </h5>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
+                Ctrl+S / D
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-300 mt-1 leading-snug">
+              Tersimpan pukul <strong className="text-slate-100 font-mono">{saveDraftToast.timestamp}</strong>
+              {saveDraftToast.scoreSnapshot !== undefined && (
+                <span> • Total: <strong className="text-amber-400 font-mono font-bold">{saveDraftToast.scoreSnapshot.toFixed(2)}</strong></span>
+              )}
+            </p>
+            <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse"></span>
+              <span>Draf tersimpan aman & sinkron dengan antrean evaluasi</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSaveDraftToast(null)}
+            className="text-slate-400 hover:text-slate-200 p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+            title="Tutup Notifikasi"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Floating Increment Step Quick Notification Pill */}
+      {stepNotification && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed top-20 right-6 z-50 bg-slate-900/95 border border-amber-500/60 backdrop-blur-md rounded-xl px-4 py-2.5 shadow-2xl flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-3 duration-150"
+        >
+          <div className="w-6 h-6 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
+            <Sliders className="w-3.5 h-3.5" />
+          </div>
+          <div className="text-xs font-bold text-slate-200">
+            {stepNotification.text}{' '}
+            <span className="text-[10px] text-amber-300 font-mono ml-1 font-normal bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">
+              (Tekan I untuk ganti)
+            </span>
           </div>
         </div>
       )}

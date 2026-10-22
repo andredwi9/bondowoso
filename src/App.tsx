@@ -9,6 +9,7 @@ import { SingleVideoUploadView } from './components/SingleVideoUploadView.tsx';
 import { ReverseStoryboardView } from './components/ReverseStoryboardView.tsx';
 import { VerificationTicketView } from './components/VerificationTicketView.tsx';
 import { ExportCommentsModal } from './components/ExportCommentsModal.tsx';
+import { GoogleDriveImportModal } from './components/GoogleDriveImportModal.tsx';
 import {
   INITIAL_KARYA,
   INITIAL_PESERTA,
@@ -87,11 +88,19 @@ export default function App() {
   const [showResetConfirmModal, setShowResetConfirmModal] = useState<boolean>(false);
   const [isExportCommentsModalOpen, setIsExportCommentsModalOpen] = useState<boolean>(false);
   const [exportCommentsFilterKaryaId, setExportCommentsFilterKaryaId] = useState<string | null>(null);
+  const [isGDriveModalOpen, setIsGDriveModalOpen] = useState<boolean>(false);
 
   const handleOpenExportComments = (karyaId?: string) => {
     setExportCommentsFilterKaryaId(karyaId || null);
     setIsExportCommentsModalOpen(true);
   };
+
+  const handleAddPenilaiansBatch = useCallback(
+    (newPens: PenilaianJuri[]) => {
+      setPenilaians((prev) => [...prev, ...newPens]);
+    },
+    []
+  );
 
   // Sync state changes to localStorage
   useEffect(() => {
@@ -464,6 +473,7 @@ export default function App() {
         unscoredCount={unscoredCount}
         openTicketCount={openTicketsCount}
         onOpenExportComments={() => handleOpenExportComments()}
+        onOpenGDriveModal={() => setIsGDriveModalOpen(true)}
       />
 
       {/* Main View Router */}
@@ -525,6 +535,7 @@ export default function App() {
             pesertas={pesertas}
             penilaians={penilaians}
             onAddKaryaBatch={handleAddKaryaBatch}
+            onAddPenilaians={handleAddPenilaiansBatch}
             onUpdateKaryaStatus={handleUpdateKaryaStatus}
             onDeleteKarya={handleDeleteKarya}
             onRunAIBatchAnalysis={handleRunAIBatchAnalysis}
@@ -554,6 +565,21 @@ export default function App() {
         pesertas={pesertas}
         penilaians={penilaians}
         initialFilterKaryaId={exportCommentsFilterKaryaId}
+      />
+
+      {/* Google Drive Import & Autonomous Evaluation Modal */}
+      <GoogleDriveImportModal
+        isOpen={isGDriveModalOpen}
+        onClose={() => setIsGDriveModalOpen(false)}
+        karyas={karyas}
+        pesertas={pesertas}
+        onAddKaryaBatch={handleAddKaryaBatch}
+        onAddPenilaians={handleAddPenilaiansBatch}
+        onSelectKaryaForScoring={(karyaId) => {
+          setSelectedKaryaForJury(karyaId);
+          setActiveTab('jury');
+        }}
+        onNavigateToLeaderboard={() => setActiveTab('leaderboard')}
       />
 
       {/* Footer */}

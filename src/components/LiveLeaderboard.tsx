@@ -18,6 +18,8 @@ import {
   Flame,
   ArrowUpDown,
   MessageSquare,
+  FileSpreadsheet,
+  FileDown,
 } from 'lucide-react';
 import {
   Karya,
@@ -27,6 +29,7 @@ import {
   UserRoleSession,
 } from '../types/index.ts';
 import { buildLeaderboardEntries } from '../utils/scoring.ts';
+import { exportCommentsDirectXLSX, exportCommentsDirectPDF } from '../utils/exportComments.ts';
 
 interface LiveLeaderboardProps {
   karyas: Karya[];
@@ -156,33 +159,51 @@ export const LiveLeaderboard: React.FC<LiveLeaderboardProps> = ({
 
         {/* Export Buttons */}
         <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+          {/* 1. Export XLSX Table */}
+          <button
+            onClick={() => exportCommentsDirectXLSX(karyas, pesertas, penilaians)}
+            type="button"
+            className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-md shadow-emerald-600/20 hover:scale-[1.02]"
+            title="Unduh seluruh rekap komentar, nilai 5 aspek, dan leaderboard dalam tabel spreadsheet Excel (.xlsx)"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Tabel Spreadsheet (.XLSX)</span>
+          </button>
+
+          {/* 2. Direct PDF */}
+          <button
+            onClick={() => exportCommentsDirectPDF(karyas, pesertas, penilaians)}
+            type="button"
+            className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all shadow-md shadow-rose-600/20 hover:scale-[1.02]"
+            title="Export langsung Berita Acara & Rekapitulasi Komentar dalam berkas PDF resmi"
+          >
+            <FileDown className="w-4 h-4" />
+            <span>Export Langsung PDF</span>
+          </button>
+
+          {/* 3. Modal Komentar Juri */}
           <button
             onClick={() => onOpenExportComments ? onOpenExportComments() : undefined}
             type="button"
             className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-indigo-950/80 hover:bg-indigo-900 text-indigo-200 text-xs font-bold border border-indigo-700/60 transition-colors shadow-sm"
-            title="Ekspor semua komentar dan justifikasi dewan juri tiap video"
+            title="Buka panel interaktif ekspor komentar dan filter tiap video"
           >
             <MessageSquare className="w-4 h-4 text-indigo-400" />
-            <span>Ekspor Komentar Juri</span>
+            <span>Semua Komentar Juri</span>
             <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-indigo-500/30 text-indigo-300">
               {penilaians.length}
             </span>
           </button>
-          <button
-            onClick={handleExportCSV}
-            type="button"
-            className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
-          >
-            <Download className="w-4 h-4 text-emerald-400" />
-            <span>Ekspor CSV Rekap</span>
-          </button>
+
+          {/* 4. Berita Acara Format Panjang */}
           <button
             onClick={onNavigateToBeritaAcara}
             type="button"
-            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md shadow-indigo-600/30 transition-colors"
+            className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
+            title="Buka tampilan Berita Acara resmi Bondowoso"
           >
-            <Printer className="w-4 h-4" />
-            <span>Cetak Berita Acara PDF</span>
+            <Printer className="w-4 h-4 text-amber-400" />
+            <span>Template Berita Acara</span>
           </button>
         </div>
       </div>

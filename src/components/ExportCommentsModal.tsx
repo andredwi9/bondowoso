@@ -4,6 +4,7 @@ import {
   Download,
   FileSpreadsheet,
   FileText,
+  FileDown,
   Copy,
   Printer,
   Check,
@@ -25,6 +26,8 @@ import {
   generateCommentsTextSummary,
   triggerFileDownload,
   extractCommentRows,
+  exportCommentsDirectXLSX,
+  exportCommentsDirectPDF,
 } from '../utils/exportComments.ts';
 
 interface ExportCommentsModalProps {
@@ -49,6 +52,7 @@ export const ExportCommentsModal: React.FC<ExportCommentsModalProps> = ({
   const [selectedKategori, setSelectedKategori] = useState<string>('Semua');
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
   const [copiedSuccess, setCopiedSuccess] = useState<boolean>(false);
+  const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
 
   // Sync initialFilterKaryaId when changed
@@ -95,6 +99,31 @@ export const ExportCommentsModal: React.FC<ExportCommentsModalProps> = ({
   if (!isOpen) return null;
 
   // Handlers for exporting
+
+  // 1. Export langsung Spreadsheet Tabel Excel (.xlsx) dengan multi-sheet
+  const handleDownloadXLSX = (karyaId?: string) => {
+    try {
+      const targetId = karyaId || (selectedKaryaId || undefined);
+      const filename = exportCommentsDirectXLSX(karyas, pesertas, penilaians, targetId);
+      setDownloadNotice(`✓ Berkas spreadsheet tabel "${filename}" berhasil diunduh langsung.`);
+      setTimeout(() => setDownloadNotice(null), 4500);
+    } catch (err: any) {
+      console.error('XLSX export failed:', err);
+    }
+  };
+
+  // 2. Export langsung Dokumen Resmi PDF (.pdf) dengan Kop Surat & AutoTable
+  const handleDownloadDirectPDF = (karyaId?: string) => {
+    try {
+      const targetId = karyaId || (selectedKaryaId || undefined);
+      const filename = exportCommentsDirectPDF(karyas, pesertas, penilaians, targetId);
+      setDownloadNotice(`✓ Dokumen PDF resmi "${filename}" berhasil digenerate dan diunduh langsung.`);
+      setTimeout(() => setDownloadNotice(null), 4500);
+    } catch (err: any) {
+      console.error('PDF export failed:', err);
+    }
+  };
+
   const handleDownloadCSV = (karyaId?: string) => {
     const timestamp = new Date().toISOString().slice(0, 10);
     const targetId = karyaId || (selectedKaryaId || undefined);
@@ -104,6 +133,8 @@ export const ExportCommentsModal: React.FC<ExportCommentsModalProps> = ({
 
     const csvContent = generateCommentsCSV(karyas, pesertas, penilaians, targetId);
     triggerFileDownload(csvContent, filename, 'text/csv;charset=utf-8');
+    setDownloadNotice(`✓ Berkas CSV "${filename}" berhasil diunduh.`);
+    setTimeout(() => setDownloadNotice(null), 3500);
   };
 
   const handleDownloadJSON = (karyaId?: string) => {
@@ -115,6 +146,8 @@ export const ExportCommentsModal: React.FC<ExportCommentsModalProps> = ({
 
     const jsonContent = generateCommentsJSON(karyas, pesertas, penilaians, targetId);
     triggerFileDownload(jsonContent, filename, 'application/json');
+    setDownloadNotice(`✓ Berkas data JSON "${filename}" berhasil diunduh.`);
+    setTimeout(() => setDownloadNotice(null), 3500);
   };
 
   const handleCopyText = (karyaId?: string) => {
@@ -199,28 +232,55 @@ export const ExportCommentsModal: React.FC<ExportCommentsModalProps> = ({
 
           {/* Action Export Buttons */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* Primary 1: Tabel Spreadsheet .XLSX */}
+            <button
+              type="button"
+              onClick={() => handleDownloadXLSX()}
+              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/25 transition-all hover:scale-[1.02]"
+              title="Unduh berkas spreadsheet tabel Excel (.xlsx) dengan matriks nilai 5 kriteria dan leaderboard"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Tabel Spreadsheet (.XLSX)</span>
+            </button>
+
+            {/* Primary 2: Export Langsung PDF */}
+            <button
+              type="button"
+              onClick={() => handleDownloadDirectPDF()}
+              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/25 transition-all hover:scale-[1.02]"
+              title="Export langsung dokumen resmi PDF Berita Acara & Rekapitulasi dengan Kop Surat Resmi"
+            >
+              <FileDown className="w-4 h-4" />
+              <span>Export Langsung PDF</span>
+            </button>
+
+            {/* Secondary 3: CSV */}
             <button
               type="button"
               onClick={() => handleDownloadCSV()}
-              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 transition-colors"
+              className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
+              title="Unduh format CSV RFC 4180 dengan UTF-8 BOM"
             >
-              <FileSpreadsheet className="w-4 h-4" />
-              <span>Unduh CSV (Excel)</span>
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+              <span>CSV</span>
             </button>
 
+            {/* Secondary 4: JSON */}
             <button
               type="button"
               onClick={() => handleDownloadJSON()}
-              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg shadow-indigo-600/20 transition-colors"
+              className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
+              title="Unduh berkas JSON terstruktur"
             >
-              <FileText className="w-4 h-4" />
-              <span>Unduh JSON</span>
+              <FileText className="w-3.5 h-3.5 text-indigo-400" />
+              <span>JSON</span>
             </button>
 
+            {/* Copy Summary */}
             <button
               type="button"
               onClick={() => handleCopyText()}
-              className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${
+              className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-colors ${
                 copiedSuccess
                   ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
@@ -228,27 +288,37 @@ export const ExportCommentsModal: React.FC<ExportCommentsModalProps> = ({
             >
               {copiedSuccess ? (
                 <>
-                  <Check className="w-4 h-4 text-emerald-400" />
-                  <span>Tersalin ke Clipboard!</span>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Tersalin!</span>
                 </>
               ) : (
                 <>
-                  <Copy className="w-4 h-4 text-slate-300" />
-                  <span>Salin Ringkasan</span>
+                  <Copy className="w-3.5 h-3.5 text-slate-300" />
+                  <span>Salin Teks</span>
                 </>
               )}
             </button>
 
+            {/* Browser Print Dialog */}
             <button
               type="button"
               onClick={handlePrint}
-              className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition-colors"
+              className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
+              title="Buka dialog cetak browser"
             >
-              <Printer className="w-4 h-4 text-amber-400" />
-              <span>Cetak / PDF</span>
+              <Printer className="w-3.5 h-3.5 text-amber-400" />
+              <span>Cetak</span>
             </button>
           </div>
         </div>
+
+        {/* Download notification banner */}
+        {downloadNotice && (
+          <div className="mx-6 mt-3 p-3 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs flex items-center space-x-2 animate-fadeIn">
+            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span className="font-semibold">{downloadNotice}</span>
+          </div>
+        )}
 
         {/* Search, Filter & View Toggle Bar */}
         <div className="px-6 py-3 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
@@ -404,11 +474,27 @@ export const ExportCommentsModal: React.FC<ExportCommentsModalProps> = ({
                         <div className="flex items-center space-x-1.5">
                           <button
                             type="button"
+                            onClick={() => handleDownloadXLSX(karya.id)}
+                            className="p-2 rounded-xl bg-slate-800 hover:bg-emerald-950/60 hover:border-emerald-500/50 text-slate-300 text-xs border border-slate-700 transition-colors"
+                            title="Unduh Tabel Spreadsheet Excel (.xlsx) Video Ini"
+                          >
+                            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadDirectPDF(karya.id)}
+                            className="p-2 rounded-xl bg-slate-800 hover:bg-rose-950/60 hover:border-rose-500/50 text-slate-300 text-xs border border-slate-700 transition-colors"
+                            title="Export Langsung Dokumen Resmi PDF Video Ini"
+                          >
+                            <FileDown className="w-4 h-4 text-rose-400" />
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => handleDownloadCSV(karya.id)}
                             className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs border border-slate-700 transition-colors"
                             title="Unduh CSV Komentar Video Ini"
                           >
-                            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                            <Download className="w-4 h-4 text-slate-300" />
                           </button>
                           <button
                             type="button"
@@ -650,14 +736,32 @@ export const ExportCommentsModal: React.FC<ExportCommentsModalProps> = ({
                         )}
                       </td>
                       <td className="py-3 px-3 align-top text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadCSV(row.karya_id)}
-                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs inline-flex items-center"
-                          title="Unduh CSV Video Ini"
-                        >
-                          <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                        </button>
+                        <div className="flex items-center justify-end space-x-1">
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadXLSX(row.karya_id)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-emerald-950 text-slate-300 text-xs inline-flex items-center border border-slate-700"
+                            title="Unduh Tabel Spreadsheet (.xlsx)"
+                          >
+                            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadDirectPDF(row.karya_id)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-950 text-slate-300 text-xs inline-flex items-center border border-slate-700"
+                            title="Export Langsung PDF"
+                          >
+                            <FileDown className="w-3.5 h-3.5 text-rose-400" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadCSV(row.karya_id)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs inline-flex items-center border border-slate-700"
+                            title="Unduh CSV Video Ini"
+                          >
+                            <Download className="w-3.5 h-3.5 text-slate-400" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -670,25 +774,33 @@ export const ExportCommentsModal: React.FC<ExportCommentsModalProps> = ({
         {/* Modal Footer */}
         <div className="px-6 py-4 bg-slate-950 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-400">
           <div className="flex items-center space-x-2">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>Format ekspor CSV mematuhi standar Excel RFC 4180 dengan UTF-8 BOM encoding.</span>
+            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>Format spreadsheet multi-sheet .XLSX dan PDF Resmi berstandar Dokumen Panitia Lomba Bondowoso 2026.</span>
           </div>
 
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-2">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold transition-colors"
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold transition-colors"
             >
               Tutup
             </button>
             <button
               type="button"
-              onClick={() => handleDownloadCSV()}
-              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold flex items-center space-x-1.5 shadow-md shadow-indigo-600/30 transition-colors"
+              onClick={() => handleDownloadDirectPDF()}
+              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold flex items-center space-x-1.5 shadow-md shadow-rose-600/30 transition-colors"
             >
-              <Download className="w-4 h-4" />
-              <span>Ekspor Semua ({scoredKaryas.length} Video)</span>
+              <FileDown className="w-4 h-4" />
+              <span>Export PDF Resmi</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDownloadXLSX()}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center space-x-1.5 shadow-md shadow-emerald-600/30 transition-colors"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Tabel Spreadsheet (.XLSX)</span>
             </button>
           </div>
         </div>

@@ -25,6 +25,10 @@ import {
   Award,
   Users,
   MessageSquare,
+  Link2,
+  FolderDown,
+  FolderOpen,
+  CheckCircle2,
 } from 'lucide-react';
 import {
   Karya,
@@ -35,12 +39,16 @@ import {
 } from '../types/index.ts';
 import { validateTechnicalSpecs } from '../utils/validation.ts';
 import { extractSubmissionsFromZip } from '../utils/zipParser.ts';
+import { generateAutonomousAgentAnalysis } from '../utils/autonomousAgents.ts';
+import { parseGoogleDriveLink } from '../utils/gdriveParser.ts';
+import { extractAndEvaluateGDriveFolder } from '../utils/gdriveService.ts';
 
 interface AdminPanelProps {
   karyas: Karya[];
   pesertas: Record<string, Peserta>;
   penilaians: PenilaianJuri[];
   onAddKaryaBatch: (newKaryas: Karya[], newPesertas: Record<string, Peserta>) => void;
+  onAddPenilaians?: (newPenilaians: PenilaianJuri[]) => void;
   onUpdateKaryaStatus: (karyaId: string, isOverridden: boolean, overrideReason: string) => void;
   onDeleteKarya: (karyaId: string, reason: string) => void;
   onRunAIBatchAnalysis: () => Promise<void>;
@@ -54,6 +62,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   pesertas,
   penilaians,
   onAddKaryaBatch,
+  onAddPenilaians,
   onUpdateKaryaStatus,
   onDeleteKarya,
   onRunAIBatchAnalysis,
@@ -61,10 +70,69 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onResetToDemoData,
   onOpenExportComments,
 }) => {
+  // Ingestion Mode: Google Drive Link (Default) vs ZIP File
+  const [ingestionTab, setIngestionTab] = useState<'GDRIVE' | 'ZIP'>('GDRIVE');
+
+  // Google Drive state
+  const [gdriveInputUrl, setGdriveInputUrl] = useState<string>('');
+  const [isProcessingGDrive, setIsProcessingGDrive] = useState<boolean>(false);
+  const [gdriveProgressStep, setGdriveProgressStep] = useState<number>(0);
+  const [gdriveProgressMsg, setGdriveProgressMsg] = useState<string>('');
+  const [gdriveError, setGdriveError] = useState<string | null>(null);
+  const [gdriveSuccessMsg, setGdriveSuccessMsg] = useState<string | null>(null);
+  const [gdriveLogs, setGdriveLogs] = useState<string[]>([]);
+
+  // ZIP state
   const [isProcessingZip, setIsProcessingZip] = useState<boolean>(false);
   const [zipLog, setZipLog] = useState<string[]>([]);
   const [zipError, setZipError] = useState<string | null>(null);
   const [zipSuccessMessage, setZipSuccessMessage] = useState<string | null>(null);
+
+  // Handle Google Drive Folder Extraction & Evaluation
+  const handleGDriveExtract = async () => {
+    if (!gdriveInputUrl.trim()) {
+      setGdriveError('Silakan masukkan tautan folder Google Drive terlebih dahulu.');
+      return;
+    }
+    const check = parseGoogleDriveLink(gdriveInputUrl);
+    if (!check.isValid) {
+      setGdriveError(check.errorMessage || 'Link Google Drive tidak valid.');
+      return;
+    }
+
+    setIsProcessingGDrive(true);
+    setGdriveError(null);
+    setGdriveSuccessMsg(null);
+    setGdriveProgressStep(1);
+    setGdriveProgressMsg('Menghubungi Google Drive Folder...');
+    setGdriveLogs([`Memindai link Google Drive: ${check.normalizedUrl}`]);
+
+    try {
+      const result = await extractAndEvaluateGDriveFolder(
+        gdriveInputUrl,
+        karyas,
+        pesertas,
+        (step, msg) => {
+          setGdriveProgressStep(step);
+          setGdriveProgressMsg(msg);
+        }
+      );
+
+      onAddKaryaBatch(result.karyas, result.pesertas);
+      if (onAddPenilaians && result.penilaians.length > 0) {
+        onAddPenilaians(result.penilaians);
+      }
+
+      setGdriveLogs(result.logs);
+      setGdriveSuccessMsg(
+        `Sukses! Berhasil mengekstrak ${result.karyas.length} video dari Google Drive dan mengeksekusi penilaian otonom 5-Agent Co-Judge.`
+      );
+    } catch (err: any) {
+      setGdriveError(err.message || 'Gagal mengekstrak video dari Google Drive.');
+    } finally {
+      setIsProcessingGDrive(false);
+    }
+  };
 
   // Manual Override Modal state (Rule-01)
   const [overrideModalKarya, setOverrideModalKarya] = useState<Karya | null>(null);
@@ -215,6 +283,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         };
 
         const newId = `BND-${maxIdNum + 1 + i}`;
+
+        // Autonomous 5-Agent Pipeline Analysis (PRD V2 FT-06)
+        const autonomousAnalysis = generateAutonomousAgentAnalysis({
+          id: newId,
+          judul_karya: sub.judulKarya,
+          kategori: sub.kategori as any,
+          deskripsi: `Karya video AI inovatif bertema potensi Kabupaten Bondowoso yang diekstrak dari arsip kolektif ZIP panitia (${sub.filename}).`,
+          metadata,
+          prompt_list_text: promptText,
+        });
+
         const newKarya: Karya = {
           id: newId,
           peserta_id: idPeserta,
@@ -230,13 +309,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           status_teknis: valResult.status,
           status_teknis_reasons: valResult.reasons,
           is_overridden: false,
+          ai_analysis: autonomousAnalysis,
           created_at: new Date().toISOString(),
         };
 
         newKaryasList.push(newKarya);
         newPesertasMap[idPeserta] = newPeserta;
         logs.push(
-          `✓ [${idPeserta}] "${sub.judulKarya}" (${sub.filename}) -> ID #${newId} - Status ${valResult.status} (${mediaInfo.duration}s, ${mediaInfo.width}x${mediaInfo.height})`
+          `✓ [${idPeserta}] "${sub.judulKarya}" (${sub.filename}) -> ID #${newId} | Rekomendasi Skor AI: ${autonomousAnalysis.score}/100 - Status ${valResult.status} (${mediaInfo.duration}s)`
         );
       }
 
@@ -427,74 +507,271 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         </div>
       </div>
 
-      {/* ZIP Ingestion & Technical Specs Section */}
+      {/* Ingestion & Technical Specs Section */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Upload ZIP Ingestion Box (7 cols) */}
+        {/* Ingestion Box (7 cols) */}
         <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <FolderArchive className="w-5 h-5 text-indigo-400" />
-              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-100">
-                Ingest Berkas Arsip Kolektif ZIP (PRD Section 5)
-              </h3>
-            </div>
-            <span className="text-[11px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
-              Format: [ID]_[Nama]_[Judul]/
-            </span>
+          {/* Ingestion Mode Selector Tabs */}
+          <div className="flex items-center space-x-2 p-1 bg-slate-950 rounded-xl border border-slate-800">
+            <button
+              type="button"
+              onClick={() => setIngestionTab('GDRIVE')}
+              className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center space-x-2 transition-all ${
+                ingestionTab === 'GDRIVE'
+                  ? 'bg-gradient-to-r from-emerald-600 to-indigo-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <FolderDown className="w-4 h-4 text-emerald-300" />
+              <span>Link Google Drive (Folder)</span>
+              <span className="px-1.5 py-0.2 rounded text-[9px] uppercase tracking-wide bg-emerald-400/20 text-emerald-300 border border-emerald-400/30">
+                Rekomendasi
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIngestionTab('ZIP')}
+              className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center space-x-2 transition-all ${
+                ingestionTab === 'ZIP'
+                  ? 'bg-indigo-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <FolderArchive className="w-4 h-4 text-indigo-300" />
+              <span>Arsip ZIP Kolektif</span>
+            </button>
           </div>
 
-          <p className="text-xs text-slate-300 leading-relaxed">
-            Unggah satu berkas arsip <code>.zip</code> kolektif (maks. 2GB) yang berisi direktori karya video peserta lomba. Sistem secara otomatis mengekstrak berkas <code>.mp4</code>, membaca teks prompt, dan mengecek kesesuaian spesifikasi teknis.
-          </p>
+          {/* TAB 1: GOOGLE DRIVE LINK EXTRACTION & EVALUATION */}
+          {ingestionTab === 'GDRIVE' && (
+            <div className="space-y-4 animate-fadeIn">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-slate-100 flex items-center gap-1.5">
+                    <FolderDown className="w-4 h-4 text-emerald-400" />
+                    Ekstraksi & Penilaian Video dari Google Drive
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Tempelkan tautan folder Google Drive pengumpulan lomba untuk mengekstrak dan menilai seluruh video secara otonom.
+                  </p>
+                </div>
+              </div>
 
-          <div
-            onClick={() => fileInputRef.current?.click()}
-            className="border-2 border-dashed border-slate-700 hover:border-indigo-500 bg-slate-950/70 hover:bg-slate-950 rounded-2xl p-8 text-center cursor-pointer transition-all group"
-          >
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleZipUpload}
-              accept=".zip,application/zip"
-              className="hidden"
-            />
-            <div className="w-12 h-12 rounded-2xl bg-indigo-600/20 text-indigo-400 flex items-center justify-center mx-auto mb-3 group-hover:scale-110 transition-transform">
-              <Upload className="w-6 h-6" />
-            </div>
-            <span className="text-xs font-bold text-slate-200 block">
-              Pilih Berkas ZIP Kolektif Pengumpulan Peserta
-            </span>
-            <span className="text-[11px] text-slate-400 mt-1 block">
-              Maksimal ukuran berkas 2GB • Ekstraksi metadata otomatis
-            </span>
-          </div>
+              {/* Link Input */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-300">
+                  Tautan Folder Google Drive:
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                    <Link2 className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <input
+                    type="url"
+                    disabled={isProcessingGDrive}
+                    value={gdriveInputUrl}
+                    onChange={(e) => {
+                      setGdriveInputUrl(e.target.value);
+                      if (gdriveError) setGdriveError(null);
+                    }}
+                    placeholder="https://drive.google.com/drive/folders/1BONDOWOSO_2026_Koleksi_Lomba_AI..."
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono shadow-inner transition-colors"
+                  />
+                </div>
 
-          {isProcessingZip && (
-            <div className="flex items-center space-x-2 text-indigo-400 text-xs">
-              <RefreshCw className="w-4 h-4 animate-spin" />
-              <span>Sedang membaca dan mengekstrak berkas arsip ZIP...</span>
+                {/* Validation Indicator */}
+                {gdriveInputUrl.trim() && (
+                  <div className="flex items-center space-x-2 text-[11px] pt-0.5">
+                    {parseGoogleDriveLink(gdriveInputUrl).isValid ? (
+                      <span className="text-emerald-400 flex items-center gap-1 font-semibold">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Valid {parseGoogleDriveLink(gdriveInputUrl).type === 'folder' ? 'Folder Google Drive' : 'Berkas Google Drive'} ID: <code className="bg-slate-800 px-1 py-0.2 rounded text-emerald-300">{parseGoogleDriveLink(gdriveInputUrl).id}</code>
+                      </span>
+                    ) : (
+                      <span className="text-amber-400 flex items-center gap-1 font-medium">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        {parseGoogleDriveLink(gdriveInputUrl).errorMessage}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Sample Google Drive Links */}
+              <div className="bg-slate-950/80 border border-slate-800/80 rounded-xl p-3 space-y-2">
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">
+                  Link Folder Uji Coba Cepat (Bondowoso 2026):
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={isProcessingGDrive}
+                    onClick={() => {
+                      setGdriveInputUrl('https://drive.google.com/drive/folders/1BND_Wisata_Ijen_Wurung_Tancak_2026');
+                      setGdriveError(null);
+                    }}
+                    className="text-left p-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 transition-colors"
+                  >
+                    <div className="text-xs font-bold text-slate-200 flex items-center justify-between">
+                      <span>Folder Pariwisata Ijen</span>
+                      <FolderOpen className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    </div>
+                    <div className="text-[10px] text-slate-400">3 Video: Kawah Wurung, Tancak Kembar, Ijen</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isProcessingGDrive}
+                    onClick={() => {
+                      setGdriveInputUrl('https://drive.google.com/drive/folders/1BND_Budaya_SingoUlung_Kuningan_Tape_2026');
+                      setGdriveError(null);
+                    }}
+                    className="text-left p-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 transition-colors"
+                  >
+                    <div className="text-xs font-bold text-slate-200 flex items-center justify-between">
+                      <span>Folder Budaya & Ekraf</span>
+                      <FolderOpen className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    </div>
+                    <div className="text-[10px] text-slate-400">3 Video: Singo Ulung, Cindogo, Pia Tape</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Progress Animation */}
+              {isProcessingGDrive && (
+                <div className="bg-emerald-950/30 border border-emerald-500/40 p-3.5 rounded-xl space-y-2.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-emerald-300 flex items-center gap-2">
+                      <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />
+                      Memproses Ekstraksi & Penilaian Otomatis...
+                    </span>
+                    <span className="font-mono text-emerald-400 text-[10px]">Tahap {gdriveProgressStep}/4</span>
+                  </div>
+                  <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-gradient-to-r from-emerald-500 to-indigo-500 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${gdriveProgressStep === 1 ? 25 : gdriveProgressStep === 2 ? 50 : gdriveProgressStep === 3 ? 80 : 100}%` }}
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-300 font-mono animate-pulse">
+                    {gdriveProgressMsg}
+                  </p>
+                </div>
+              )}
+
+              {/* Error Notice */}
+              {gdriveError && (
+                <div className="bg-rose-950/80 border border-rose-500/60 p-3 rounded-xl flex items-center space-x-2 text-rose-300 text-xs">
+                  <AlertOctagon className="w-4 h-4 shrink-0" />
+                  <span>{gdriveError}</span>
+                </div>
+              )}
+
+              {/* Success Notice */}
+              {gdriveSuccessMsg && (
+                <div className="bg-emerald-950/80 border border-emerald-500/60 p-3.5 rounded-xl flex items-center space-x-2 text-emerald-300 text-xs">
+                  <CheckCircle className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <span>{gdriveSuccessMsg}</span>
+                </div>
+              )}
+
+              {/* Action Button */}
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[11px] text-slate-400">
+                  ⚡ Otomatis menjalankan 5-Agent Pipeline & sinkronisasi Leaderboard
+                </span>
+                <button
+                  type="button"
+                  disabled={isProcessingGDrive}
+                  onClick={handleGDriveExtract}
+                  className="flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/25 transition-all hover:scale-[1.02] disabled:opacity-50"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>{isProcessingGDrive ? 'Mengekstrak Video...' : 'Ekstrak & Analisa Seluruh Video Google Drive'}</span>
+                </button>
+              </div>
+
+              {/* Logs */}
+              {gdriveLogs.length > 0 && (
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-[11px] text-slate-400 max-h-36 overflow-y-auto space-y-1">
+                  {gdriveLogs.map((log, index) => (
+                    <div key={index}>{log}</div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
-          {zipError && (
-            <div className="bg-rose-950/80 border border-rose-500/60 p-3 rounded-xl flex items-center space-x-2 text-rose-300 text-xs">
-              <AlertOctagon className="w-4 h-4 shrink-0" />
-              <span>{zipError}</span>
-            </div>
-          )}
+          {/* TAB 2: ZIP INGESTION (PRD Section 5) */}
+          {ingestionTab === 'ZIP' && (
+            <div className="space-y-4 animate-fadeIn">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <FolderArchive className="w-5 h-5 text-indigo-400" />
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-slate-100">
+                    Ingest Berkas Arsip Kolektif ZIP (PRD Section 5)
+                  </h3>
+                </div>
+                <span className="text-[11px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                  Format: [ID]_[Nama]_[Judul]/
+                </span>
+              </div>
 
-          {zipSuccessMessage && (
-            <div className="bg-emerald-950/80 border border-emerald-500/60 p-3 rounded-xl flex items-center space-x-2 text-emerald-300 text-xs">
-              <CheckCircle className="w-4 h-4 shrink-0" />
-              <span>{zipSuccessMessage}</span>
-            </div>
-          )}
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Unggah satu berkas arsip <code>.zip</code> kolektif (maks. 2GB) yang berisi direktori karya video peserta lomba. Sistem secara otomatis mengekstrak berkas <code>.mp4</code>, membaca teks prompt, dan mengecek kesesuaian spesifikasi teknis.
+              </p>
 
-          {zipLog.length > 0 && (
-            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-[11px] text-slate-400 max-h-36 overflow-y-auto space-y-1">
-              {zipLog.map((log, index) => (
-                <div key={index}>{log}</div>
-              ))}
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="border-2 border-dashed border-slate-700 hover:border-indigo-500 bg-slate-950/70 hover:bg-slate-950 rounded-2xl p-8 text-center cursor-pointer transition-all group"
+              >
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleZipUpload}
+                  accept=".zip,application/zip"
+                  className="hidden"
+                />
+                <div className="w-12 h-12 rounded-2xl bg-indigo-600/20 text-indigo-400 flex items-center justify-center mx-auto mb-3 group-hover:scale-110 transition-transform">
+                  <Upload className="w-6 h-6" />
+                </div>
+                <span className="text-xs font-bold text-slate-200 block">
+                  Pilih Berkas ZIP Kolektif Pengumpulan Peserta
+                </span>
+                <span className="text-[11px] text-slate-400 mt-1 block">
+                  Maksimal ukuran berkas 2GB • Ekstraksi metadata otomatis
+                </span>
+              </div>
+
+              {isProcessingZip && (
+                <div className="flex items-center space-x-2 text-indigo-400 text-xs">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Sedang membaca dan mengekstrak seluruh berkas video dari ZIP...</span>
+                </div>
+              )}
+
+              {zipError && (
+                <div className="bg-rose-950/80 border border-rose-500/60 p-3 rounded-xl flex items-center space-x-2 text-rose-300 text-xs">
+                  <AlertOctagon className="w-4 h-4 shrink-0" />
+                  <span>{zipError}</span>
+                </div>
+              )}
+
+              {zipSuccessMessage && (
+                <div className="bg-emerald-950/80 border border-emerald-500/60 p-3 rounded-xl flex items-center space-x-2 text-emerald-300 text-xs">
+                  <CheckCircle className="w-4 h-4 shrink-0" />
+                  <span>{zipSuccessMessage}</span>
+                </div>
+              )}
+
+              {zipLog.length > 0 && (
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-[11px] text-slate-400 max-h-36 overflow-y-auto space-y-1">
+                  {zipLog.map((log, index) => (
+                    <div key={index}>{log}</div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

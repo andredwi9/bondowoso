@@ -1,4 +1,3 @@
-import React from 'react';
 import {
   Printer,
   FileCheck,
@@ -7,9 +6,12 @@ import {
   ShieldCheck,
   QrCode,
   Award,
+  FileSpreadsheet,
+  FileDown,
 } from 'lucide-react';
 import { Karya, PenilaianJuri, Peserta } from '../types/index.ts';
 import { buildLeaderboardEntries } from '../utils/scoring.ts';
+import { exportCommentsDirectXLSX, exportCommentsDirectPDF } from '../utils/exportComments.ts';
 
 interface BeritaAcaraExportProps {
   karyas: Karya[];
@@ -53,7 +55,7 @@ export const BeritaAcaraExport: React.FC<BeritaAcaraExportProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={onBackToLeaderboard}
             type="button"
@@ -62,12 +64,30 @@ export const BeritaAcaraExport: React.FC<BeritaAcaraExportProps> = ({
             Kembali ke Leaderboard
           </button>
           <button
+            onClick={() => exportCommentsDirectXLSX(karyas, pesertas, penilaians)}
+            type="button"
+            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-md shadow-emerald-600/25 hover:scale-[1.02]"
+            title="Unduh seluruh tabel rekap penilaian dan komentar juri dalam format Excel (.XLSX)"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Tabel Spreadsheet (.XLSX)</span>
+          </button>
+          <button
+            onClick={() => exportCommentsDirectPDF(karyas, pesertas, penilaians)}
+            type="button"
+            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all shadow-md shadow-rose-600/25 hover:scale-[1.02]"
+            title="Unduh langsung dokumen PDF Berita Acara & Rekapitulasi Juri"
+          >
+            <FileDown className="w-4 h-4" />
+            <span>Export Langsung PDF</span>
+          </button>
+          <button
             onClick={handlePrint}
             type="button"
-            className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center space-x-2 transition-colors"
+            className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center space-x-2 transition-colors"
           >
             <Printer className="w-4 h-4" />
-            <span>Cetak Dokumen Resmi / Simpan PDF</span>
+            <span>Cetak / Print Dialog</span>
           </button>
         </div>
       </div>
